@@ -32,8 +32,8 @@ app.add_middleware(
 )
 
 # Auto-create tables in development only; use Alembic migrations in production
-if os.getenv("DEBUG", "false").lower() == "true":
-    Base.metadata.create_all(bind=engine)
+
+Base.metadata.create_all(bind=engine)
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
