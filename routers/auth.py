@@ -86,11 +86,11 @@ def login(login_data: LoginBody, db: Session = Depends(get_db)):
             detail="Invalid email or password",
         )
 
-    if not user.is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified. Please verify your email before logging in.",
-        )
+   # if not user.is_verified:
+    #    raise HTTPException(
+     #       status_code=status.HTTP_403_FORBIDDEN,
+      #      detail="Email not verified. Please verify your email before logging in.",
+       # )
 
     access_token = create_access_token(data={"sub": user.email})
     refresh_token = create_refresh_token(data={"sub": user.email})
