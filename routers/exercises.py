@@ -1,10 +1,11 @@
-from typing import Optional
+import os
+import time
+from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, HTTPException, Path, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import httpx
-from cachetools import TTLCache
 
 from database import get_db
 from models.user import User
@@ -13,140 +14,73 @@ from auth.utils import get_current_user
 
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
-# Muscle-name lookup (populated once from wger API, with hardcoded fallback)
-# ---------------------------------------------------------------------------
-_MUSCLE_FALLBACK: dict[int, str] = {
-    1: "Biceps brachii",
-    2: "Anterior deltoid",
-    3: "Serratus anterior",
-    4: "Pectoralis major",
-    5: "Triceps brachii",
-    6: "Biceps femoris",
-    7: "Gastrocnemius",
-    8: "Anterior tibial",
-    9: "Vastus lateralis",
-    10: "Rectus abdominis",
-    11: "Gluteus maximus",
-    12: "Soleus",
-    13: "Quadriceps",
-    14: "Rear deltoid",
-    15: "Brachialis",
-    16: "Latissimus dorsi",
-}
+EXERCISEDB_URL = os.getenv("EXERCISEDB_URL", "https://exercisedb-apiii.vercel.app")
 
-_muscle_map: dict[int, str] = {}  # filled on first use
+_cache: dict = {}
+_cache_time: dict = {}
+CACHE_TTL = 3600  # 1 hour
 
+def _get_from_cache(key: str) -> Optional[Any]:
+    now = time.time()
+    if key in _cache and key in _cache_time:
+        if now - _cache_time[key] < CACHE_TTL:
+            return _cache[key]
+        else:
+            del _cache[key]
+            del _cache_time[key]
+    return None
 
-def _ensure_muscle_map() -> None:
-    """Fetch the wger muscle list once and cache it permanently."""
-    global _muscle_map
-    if _muscle_map:
-        return
-    try:
-        resp = httpx.get(
-            "https://wger.de/api/v2/muscle/?format=json&limit=100",
-            timeout=5.0,
-        )
-        if resp.status_code == 200:
-            for m in resp.json().get("results", []):
-                name_en = m.get("name_en") or m.get("name") or ""
-                if name_en:
-                    _muscle_map[m["id"]] = name_en
-    except (httpx.TimeoutException, httpx.ConnectError):
-        pass
-    # Merge fallback for any IDs we didn't get from the API
-    for mid, mname in _MUSCLE_FALLBACK.items():
-        _muscle_map.setdefault(mid, mname)
+def _set_in_cache(key: str, value: Any):
+    _cache[key] = value
+    _cache_time[key] = time.time()
 
-
-# ---------------------------------------------------------------------------
-# Caches
-# ---------------------------------------------------------------------------
-# Search-results cache (1 hr)
-_exercise_cache: TTLCache = TTLCache(maxsize=1000, ttl=3600)
-_stale_cache: dict[str, list] = {}
-
-# Individual exercise-detail cache (24 hr)
-_exercise_detail_cache: TTLCache = TTLCache(maxsize=500, ttl=86400)
-
+def _normalize_exercise(data: dict) -> dict:
+    return {
+        "id": data.get("exerciseId", ""),
+        "name": data.get("name", ""),
+        "gif_url": data.get("gifUrl", ""),
+        "target_muscles": data.get("targetMuscles", []),
+        "body_parts": data.get("bodyParts", []),
+        "equipment": data.get("equipments", []),
+        "secondary_muscles": data.get("secondaryMuscles", []),
+        "instructions": data.get("instructions", [])
+    }
 
 @router.get("/search")
 def search_exercises(
-    q: str = Query(..., min_length=2, description="Search term"),
-    limit: int = Query(10, ge=1, le=30, description="Max results"),
+    q: str = Query(..., description="Search term"),
     current_user: User = Depends(get_current_user),
 ):
-    """Search for exercises using the wger API with in-memory caching.
-
-    Queries the wger exercise database by search term. Results are cached
-    for 1 hour. If the external API is unreachable, stale cached results
-    are returned when available; otherwise a 503 is raised.
-    """
-    cache_key = q.lower()
-
-    # Return cached results if available
-    if cache_key in _exercise_cache:
-        return _exercise_cache[cache_key][:limit]
-
-    # Call wger API
+    cache_key = f"search_{q}"
+    cached_result = _get_from_cache(cache_key)
+    if cached_result is not None:
+        return cached_result
+    
     try:
         response = httpx.get(
-            "https://wger.de/api/v2/exercise/search/",
-            params={"term": q, "language": "english", "format": "json"},
-            timeout=5.0,
+            f"{EXERCISEDB_URL}/api/v1/exercises/search",
+            params={"q": q, "limit": 10},
+            timeout=10.0
         )
-        if response.status_code != 200:
-            raise httpx.HTTPStatusError(
-                f"Non-200 status: {response.status_code}",
-                request=response.request,
-                response=response,
-            )
-
+        response.raise_for_status()
         data = response.json()
-        suggestions = data.get("suggestions", [])
-
-        results = []
-        for suggestion in suggestions:
-            entry = suggestion.get("data", {})
-            exercise_id = entry.get("id")
-            results.append(
-                {
-                    "id": exercise_id,
-                    "name": entry.get("name"),
-                    "category": entry.get("category", []),
-                    "muscles": [],
-                    "muscles_secondary": [],
-                }
-            )
-
-        # Update both caches
-        _exercise_cache[cache_key] = results
-        _stale_cache[cache_key] = results
-
-        return results[:limit]
-
-    except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
-        # Fallback to stale cache if available
-        if cache_key in _stale_cache:
-            return _stale_cache[cache_key][:limit]
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Exercise search service is temporarily unavailable. Please try again later.",
-        )
-
+        
+        if data.get("success"):
+            exercises = data.get("data", [])
+            normalized = [_normalize_exercise(ex) for ex in exercises]
+            _set_in_cache(cache_key, normalized)
+            return normalized
+        return []
+        
+    except Exception:
+        return []
 
 @router.get("/recent")
 def get_recent_exercises(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return the 8 most recently used exercise names for the current user.
-
-    Queries workout sets joined with workouts, groups by exercise name,
-    and orders by the most recent workout date descending.
-    """
+    """Return the 8 most recently used exercise names for the current user."""
     results = (
         db.query(WorkoutSet.exercise_name)
         .join(Workout, WorkoutSet.workout_id == Workout.id)
@@ -160,6 +94,35 @@ def get_recent_exercises(
     exercises = [row[0] for row in results]
     return {"exercises": exercises}
 
+@router.get("/{exercise_id}")
+def get_exercise_by_id(
+    exercise_id: str = Path(..., description="Exercise ID"),
+    current_user: User = Depends(get_current_user),
+):
+    cache_key = f"exercise_{exercise_id}"
+    cached_result = _get_from_cache(cache_key)
+    if cached_result is not None:
+        return cached_result
+    
+    try:
+        response = httpx.get(
+            f"{EXERCISEDB_URL}/api/v1/exercises/{exercise_id}",
+            timeout=10.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("success") and "data" in data:
+            normalized = _normalize_exercise(data["data"])
+            _set_in_cache(cache_key, normalized)
+            return normalized
+        raise HTTPException(status_code=404, detail="Exercise not found")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Exercise not found")
+        raise HTTPException(status_code=503, detail="Exercise details unavailable")
+    except Exception:
+        raise HTTPException(status_code=503, detail="Exercise details unavailable")
 
 @router.get("/{exercise_name}/history")
 def get_exercise_history(
@@ -167,11 +130,7 @@ def get_exercise_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return the last 10 sessions where the current user logged a specific exercise.
-
-    Performs a case-insensitive match on exercise name and returns
-    date, sets, reps, weight, and workout ID for each entry.
-    """
+    """Return the last 10 sessions where the current user logged a specific exercise."""
     rows = (
         db.query(
             Workout.date,
