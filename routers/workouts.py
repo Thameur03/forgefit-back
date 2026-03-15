@@ -10,6 +10,7 @@ from models.user import User
 from models.workout import Workout, WorkoutSet
 from schemas.workout import (
     WorkoutCreate,
+    WorkoutUpdate,
     WorkoutResponse,
     WorkoutSummary,
     WorkoutSetCreate,
@@ -82,6 +83,8 @@ def _build_workout_response(db: Session, workout: Workout) -> dict:
         "user_id": workout.user_id,
         "date": workout.date,
         "notes": workout.notes,
+        "name": workout.name,
+        "duration_seconds": workout.duration_seconds,
         "sets": sets_response,
         "total_sets": total_sets,
         "total_volume_kg": total_volume_kg,
@@ -100,6 +103,8 @@ def create_workout(
         user_id=current_user.id,
         date=workout_date,
         notes=data.notes,
+        name=data.name,
+        duration_seconds=data.duration_seconds,
     )
     db.add(workout)
     db.commit()
@@ -178,6 +183,8 @@ def list_workouts(
                 "user_id": w.user_id,
                 "date": w.date,
                 "notes": w.notes,
+                "name": w.name,
+                "duration_seconds": w.duration_seconds,
                 "total_sets": total_sets,
                 "total_volume_kg": total_volume_kg,
             }
@@ -217,11 +224,11 @@ def get_workout(
 )
 def update_workout(
     workout_id: int,
-    data: WorkoutCreate,
+    data: WorkoutUpdate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Update workout date or notes."""
+    """Update workout date, notes, name, or duration_seconds."""
     workout = db.query(Workout).filter(Workout.id == workout_id).first()
     if workout is None:
         raise HTTPException(
@@ -236,6 +243,10 @@ def update_workout(
         workout.date = data.date
     if data.notes is not None:
         workout.notes = data.notes
+    if data.name is not None:
+        workout.name = data.name
+    if data.duration_seconds is not None:
+        workout.duration_seconds = data.duration_seconds
     db.commit()
     db.refresh(workout)
     return _build_workout_response(db, workout)
@@ -263,24 +274,31 @@ def delete_workout(
     return {"message": "Workout deleted"}
 
 
-@router.delete("/sets/{set_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{workout_id}/sets/{set_id}", status_code=status.HTTP_200_OK)
 def delete_set(
+    workout_id: int,
     set_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Delete a single set from a workout."""
-    workout_set = db.query(WorkoutSet).filter(WorkoutSet.id == set_id).first()
+    workout = db.query(Workout).filter(Workout.id == workout_id).first()
+    if workout is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workout not found"
+        )
+    if workout.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete from this workout",
+        )
+    
+    workout_set = db.query(WorkoutSet).filter(WorkoutSet.id == set_id, WorkoutSet.workout_id == workout_id).first()
     if workout_set is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Set not found"
         )
-    workout = db.query(Workout).filter(Workout.id == workout_set.workout_id).first()
-    if workout is None or workout.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this set",
-        )
+    
     db.delete(workout_set)
     db.commit()
     return {"message": "Set deleted"}

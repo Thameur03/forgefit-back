@@ -32,8 +32,22 @@ app.add_middleware(
 )
 
 # Auto-create tables in development only; use Alembic migrations in production
+from sqlalchemy import text
 
 Base.metadata.create_all(bind=engine)
+
+with engine.connect() as conn:
+    conn.execute(text("""
+      ALTER TABLE workouts 
+      ADD COLUMN IF NOT EXISTS 
+        name VARCHAR(255)
+    """))
+    conn.execute(text("""
+      ALTER TABLE workouts 
+      ADD COLUMN IF NOT EXISTS 
+        duration_seconds INTEGER DEFAULT 0
+    """))
+    conn.commit()
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])

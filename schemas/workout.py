@@ -49,6 +49,14 @@ class WorkoutSetResponse(BaseModel):
 class WorkoutCreate(BaseModel):
     date: Optional[date] = None  # defaults to today in the endpoint
     notes: Optional[str] = Field(default=None, max_length=500)
+    name: Optional[str] = None
+    duration_seconds: Optional[int] = 0
+
+class WorkoutUpdate(BaseModel):
+    date: Optional[date] = None
+    notes: Optional[str] = Field(default=None, max_length=500)
+    name: Optional[str] = None
+    duration_seconds: Optional[int] = 0
 
 
 class WorkoutResponse(BaseModel):
@@ -56,6 +64,8 @@ class WorkoutResponse(BaseModel):
     user_id: int
     date: date
     notes: Optional[str] = None
+    name: Optional[str] = None
+    duration_seconds: Optional[int] = 0
     sets: List[WorkoutSetResponse] = []
     total_sets: int = 0
     total_volume_kg: float = 0.0
@@ -70,6 +80,8 @@ class WorkoutSummary(BaseModel):
     user_id: int
     date: date
     notes: Optional[str] = None
+    name: Optional[str] = None
+    duration_seconds: Optional[int] = 0
     total_sets: int = 0
     total_volume_kg: float = 0.0
 

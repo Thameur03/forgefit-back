@@ -9,6 +9,8 @@ class Workout(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     date = Column(Date, nullable=False)
     notes = Column(String, nullable=True)
+    name = Column(String(255), nullable=True)
+    duration_seconds = Column(Integer, default=0)
 
     sets = relationship("WorkoutSet", back_populates="workout", cascade="all, delete-orphan")
 
