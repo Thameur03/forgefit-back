@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Date, Float
 from sqlalchemy.sql import func
 from database import Base
 
@@ -17,3 +17,10 @@ class User(Base):
     verification_code_expires = Column(DateTime(timezone=True), nullable=True)
     reset_password_code = Column(String, nullable=True)
     reset_password_code_expires = Column(DateTime(timezone=True), nullable=True)
+
+    # Profile fields
+    date_of_birth = Column(Date, nullable=True)
+    gender = Column(String(20), nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    height_cm = Column(Float, nullable=True)
+    fitness_level = Column(String(20), nullable=True)

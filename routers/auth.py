@@ -1,4 +1,3 @@
-import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,23 +10,16 @@ from models.user import User
 from models.token import RevokedToken
 from schemas.user import (
     UserCreate, UserResponse, Token, LoginBody,
-    VerifyEmailRequest, ResendVerificationRequest,
     ForgotPasswordRequest, ResetPasswordRequest, MessageResponse,
-    RefreshTokenRequest, LogoutRequest,
+    RefreshTokenRequest, LogoutRequest, UserProfileUpdate,
 )
 from auth.utils import (
     hash_password, verify_password, create_access_token,
     get_current_user, create_refresh_token, is_token_revoked,
     SECRET_KEY, ALGORITHM,
 )
-from auth.email import send_verification_email, send_password_reset_email
 
 router = APIRouter()
-
-
-def _generate_code() -> str:
-    """Generate a random 6-digit verification code."""
-    return f"{secrets.randbelow(900000) + 100000}"
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -49,18 +41,16 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
         full_name=user_data.full_name,
+        is_verified=True,
+        date_of_birth=user_data.date_of_birth,
+        gender=user_data.gender,
+        weight_kg=user_data.weight_kg,
+        height_cm=user_data.height_cm,
+        fitness_level=user_data.fitness_level,
     )
     db.add(new_user)
-
-    code = _generate_code()
-    new_user.verification_code = hash_password(code)
-    new_user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
-
     db.commit()
     db.refresh(new_user)
-
-    send_verification_email(new_user.email, code)
-
     return new_user
 
 
@@ -86,12 +76,6 @@ def login(login_data: LoginBody, db: Session = Depends(get_db)):
             detail="Invalid email or password",
         )
 
-   # if not user.is_verified:
-    #    raise HTTPException(
-     #       status_code=status.HTTP_403_FORBIDDEN,
-      #      detail="Email not verified. Please verify your email before logging in.",
-       # )
-
     access_token = create_access_token(data={"sub": user.email})
     refresh_token = create_refresh_token(data={"sub": user.email})
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
@@ -108,64 +92,39 @@ def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.post("/verify-email", response_model=MessageResponse, status_code=status.HTTP_200_OK)
-def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
+@router.put("/profile", response_model=UserResponse)
+def update_profile(
+    profile: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
-    Verify a user's email address using the 6-digit code sent during registration.
+    Update the current user's profile. Only provided (non-None) fields are updated.
     """
-    user = db.query(User).filter(User.email == data.email).first()
-    if user and user.is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email is already verified",
-        )
-    if (
-        not user
-        or user.verification_code is None
-        or user.verification_code_expires is None
-        or datetime.now(timezone.utc) > user.verification_code_expires
-        or not verify_password(data.code, user.verification_code)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired verification code",
-        )
-    user.is_verified = True
-    user.verification_code = None
-    user.verification_code_expires = None
+    if profile.full_name is not None:
+        current_user.full_name = profile.full_name
+    if profile.date_of_birth is not None:
+        current_user.date_of_birth = profile.date_of_birth
+    if profile.gender is not None:
+        current_user.gender = profile.gender
+    if profile.weight_kg is not None:
+        current_user.weight_kg = profile.weight_kg
+    if profile.height_cm is not None:
+        current_user.height_cm = profile.height_cm
+    if profile.fitness_level is not None:
+        current_user.fitness_level = profile.fitness_level
     db.commit()
-    return {"message": "Email verified successfully"}
-
-
-@router.post("/resend-verification", response_model=MessageResponse, status_code=status.HTTP_200_OK)
-def resend_verification(data: ResendVerificationRequest, db: Session = Depends(get_db)):
-    """
-    Resend a verification code to the user's email.
-    Generates a new 6-digit code with 15-minute expiry.
-    """
-    user = db.query(User).filter(User.email == data.email).first()
-    if user and not user.is_verified:
-        code = _generate_code()
-        user.verification_code = hash_password(code)
-        user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
-        db.commit()
-        send_verification_email(user.email, code)
-    return {"message": "If this email is registered and unverified, a verification code has been sent"}
+    db.refresh(current_user)
+    return current_user
 
 
 @router.post("/forgot-password", response_model=MessageResponse, status_code=status.HTTP_200_OK)
 def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
     """
-    Request a password reset code. Always returns success message
-    regardless of whether the email exists (security best practice).
+    Request a password reset. Returns success message regardless of
+    whether the email exists (security best practice).
+    Email sending will be added post-launch.
     """
-    user = db.query(User).filter(User.email == data.email).first()
-    if user:
-        code = _generate_code()
-        user.reset_password_code = hash_password(code)
-        user.reset_password_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
-        db.commit()
-        send_password_reset_email(user.email, code)
     return {"message": "If this email exists, a reset code has been sent"}
 
 

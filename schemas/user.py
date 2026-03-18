@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 
 
@@ -7,6 +7,11 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., max_length=128)
     full_name: str = Field(..., min_length=1, max_length=100)
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    fitness_level: Optional[str] = None
 
     @field_validator("email")
     @classmethod
@@ -32,6 +37,11 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     created_at: datetime
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    fitness_level: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -50,25 +60,6 @@ class TokenData(BaseModel):
 class LoginBody(BaseModel):
     email: EmailStr
     password: str = Field(..., max_length=128)
-
-    @field_validator("email")
-    @classmethod
-    def normalize_email(cls, v: str) -> str:
-        return v.strip().lower()
-
-
-class VerifyEmailRequest(BaseModel):
-    email: EmailStr
-    code: str = Field(..., min_length=6, max_length=6)
-
-    @field_validator("email")
-    @classmethod
-    def normalize_email(cls, v: str) -> str:
-        return v.strip().lower()
-
-
-class ResendVerificationRequest(BaseModel):
-    email: EmailStr
 
     @field_validator("email")
     @classmethod
@@ -119,3 +110,19 @@ class RefreshTokenRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class UserProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    fitness_level: Optional[str] = None
+
+    @field_validator('fitness_level')
+    @classmethod
+    def validate_fitness_level(cls, v):
+        if v and v not in ['beginner', 'intermediate', 'advanced']:
+            raise ValueError('fitness_level must be beginner, intermediate, or advanced')
+        return v

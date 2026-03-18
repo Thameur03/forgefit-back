@@ -47,6 +47,31 @@ with engine.connect() as conn:
       ADD COLUMN IF NOT EXISTS 
         duration_seconds INTEGER DEFAULT 0
     """))
+    conn.execute(text("""
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS
+        date_of_birth DATE
+    """))
+    conn.execute(text("""
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS
+        gender VARCHAR(20)
+    """))
+    conn.execute(text("""
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS
+        weight_kg FLOAT
+    """))
+    conn.execute(text("""
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS
+        height_cm FLOAT
+    """))
+    conn.execute(text("""
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS
+        fitness_level VARCHAR(20)
+    """))
     conn.commit()
 
 # Include routers
