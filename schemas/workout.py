@@ -66,6 +66,7 @@ class WorkoutResponse(BaseModel):
     notes: Optional[str] = None
     name: Optional[str] = None
     duration_seconds: Optional[int] = 0
+    calories_burned: Optional[int] = 0
     sets: List[WorkoutSetResponse] = []
     total_sets: int = 0
     total_volume_kg: float = 0.0
@@ -82,6 +83,7 @@ class WorkoutSummary(BaseModel):
     notes: Optional[str] = None
     name: Optional[str] = None
     duration_seconds: Optional[int] = 0
+    calories_burned: Optional[int] = 0
     total_sets: int = 0
     total_volume_kg: float = 0.0
 

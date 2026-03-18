@@ -61,7 +61,7 @@ def _compute_totals(workout_sets: list) -> tuple:
     return total_sets, total_volume_kg
 
 
-def _build_workout_response(db: Session, workout: Workout) -> dict:
+def _build_workout_response(db: Session, workout: Workout, user: User) -> dict:
     """Build a WorkoutResponse dict with sets and computed totals."""
     sets_response = []
     # TODO: batch last-session lookups to avoid N+1 queries
@@ -78,6 +78,13 @@ def _build_workout_response(db: Session, workout: Workout) -> dict:
             )
         )
     total_sets, total_volume_kg = _compute_totals(workout.sets)
+    
+    # Calculate calories burned
+    body_weight = user.weight_kg or 75.0
+    MET_WEIGHT_TRAINING = 3.5
+    duration_minutes = (workout.duration_seconds or 0) / 60
+    calories = int((MET_WEIGHT_TRAINING * body_weight * duration_minutes) / 60)
+
     return {
         "id": workout.id,
         "user_id": workout.user_id,
@@ -85,6 +92,7 @@ def _build_workout_response(db: Session, workout: Workout) -> dict:
         "notes": workout.notes,
         "name": workout.name,
         "duration_seconds": workout.duration_seconds,
+        "calories_burned": calories,
         "sets": sets_response,
         "total_sets": total_sets,
         "total_volume_kg": total_volume_kg,
@@ -109,7 +117,7 @@ def create_workout(
     db.add(workout)
     db.commit()
     db.refresh(workout)
-    return _build_workout_response(db, workout)
+    return _build_workout_response(db, workout, current_user)
 
 
 @router.post(
@@ -175,8 +183,16 @@ def list_workouts(
         .all()
     )
     summaries = []
+    
+    body_weight = current_user.weight_kg or 75.0
+    MET_WEIGHT_TRAINING = 3.5
+    
     for w in workouts:
         total_sets, total_volume_kg = _compute_totals(w.sets)
+        
+        duration_minutes = (w.duration_seconds or 0) / 60
+        calories = int((MET_WEIGHT_TRAINING * body_weight * duration_minutes) / 60)
+        
         summaries.append(
             {
                 "id": w.id,
@@ -185,6 +201,7 @@ def list_workouts(
                 "notes": w.notes,
                 "name": w.name,
                 "duration_seconds": w.duration_seconds,
+                "calories_burned": calories,
                 "total_sets": total_sets,
                 "total_volume_kg": total_volume_kg,
             }
@@ -216,7 +233,7 @@ def get_workout(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to access this workout",
         )
-    return _build_workout_response(db, workout)
+    return _build_workout_response(db, workout, current_user)
 
 
 @router.put(
@@ -249,7 +266,7 @@ def update_workout(
         workout.duration_seconds = data.duration_seconds
     db.commit()
     db.refresh(workout)
-    return _build_workout_response(db, workout)
+    return _build_workout_response(db, workout, current_user)
 
 
 @router.delete("/{workout_id}", status_code=status.HTTP_200_OK)
