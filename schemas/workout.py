@@ -53,10 +53,11 @@ class WorkoutCreate(BaseModel):
     duration_seconds: Optional[int] = 0
 
 class WorkoutUpdate(BaseModel):
-    date: Optional[date] = None
-    notes: Optional[str] = Field(default=None, max_length=500)
     name: Optional[str] = None
-    duration_seconds: Optional[int] = 0
+    notes: Optional[str] = None
+    date: Optional[date] = None
+    duration_seconds: Optional[int] = None
+    calories_burned: Optional[int] = None
 
 
 class WorkoutResponse(BaseModel):

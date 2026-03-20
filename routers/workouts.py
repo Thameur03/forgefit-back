@@ -256,14 +256,17 @@ def update_workout(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to modify this workout",
         )
-    if data.date is not None:
-        workout.date = data.date
-    if data.notes is not None:
-        workout.notes = data.notes
     if data.name is not None:
         workout.name = data.name
+    if data.notes is not None:
+        workout.notes = data.notes
+    if data.date is not None:
+        workout.date = data.date
     if data.duration_seconds is not None:
         workout.duration_seconds = data.duration_seconds
+    if data.calories_burned is not None:
+        workout.calories_burned = data.calories_burned
+        
     db.commit()
     db.refresh(workout)
     return _build_workout_response(db, workout, current_user)
