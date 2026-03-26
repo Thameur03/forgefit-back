@@ -91,6 +91,11 @@ class UpdateProgramBody(BaseModel):
     days_per_week: Optional[int] = None
 
 
+class AddDayBody(BaseModel):
+    day_number: int
+    day_name: str
+
+
 # ---------------------------------------------------------------------------
 # Hardcoded Templates
 # ---------------------------------------------------------------------------
@@ -551,6 +556,32 @@ def delete_program(
     db.delete(program)
     db.commit()
     return {"message": "Program deleted"}
+
+
+@router.post(
+    "/{program_id}/days",
+    response_model=ProgramDaySchema,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_day_to_program(
+    program_id: int,
+    data: AddDayBody,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Add a new day to an existing program."""
+    program = _get_program_or_404(program_id, db)
+    _assert_ownership(program, current_user)
+
+    day = ProgramDay(
+        program_id=program_id,
+        day_number=data.day_number,
+        day_name=data.day_name,
+    )
+    db.add(day)
+    db.commit()
+    db.refresh(day)
+    return day
 
 
 @router.put(
