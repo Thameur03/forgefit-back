@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class MealType(str, Enum):
+    """Kept for backwards compatibility with existing data."""
     breakfast = "Breakfast"
     lunch = "Lunch"
     dinner = "Dinner"
@@ -14,7 +15,7 @@ class MealType(str, Enum):
 
 class NutritionLogCreate(BaseModel):
     date: Optional[date] = None  # defaults to today in the endpoint
-    meal_name: MealType
+    meal_name: str = Field(..., min_length=1, max_length=100)  # plain str — any meal name accepted
     food_name: str = Field(..., min_length=1, max_length=200)
     calories: float = Field(..., gt=0, le=10000)
     protein_g: Optional[float] = Field(default=None, ge=0, le=2000)

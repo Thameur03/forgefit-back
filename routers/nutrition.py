@@ -59,7 +59,7 @@ def create_nutrition_log(
     log = NutritionLog(
         user_id=current_user.id,
         date=log_date,
-        meal_name=data.meal_name.value,
+        meal_name=data.meal_name,
         food_name=data.food_name,
         calories=data.calories,
         protein_g=data.protein_g,
@@ -179,7 +179,7 @@ def update_nutrition_log(
             detail="Not authorized to modify this food log",
         )
     log.date = data.date if data.date is not None else log.date
-    log.meal_name = data.meal_name.value
+    log.meal_name = data.meal_name
     log.food_name = data.food_name
     log.calories = data.calories
     log.protein_g = data.protein_g
