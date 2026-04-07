@@ -21,6 +21,7 @@ class NutritionLogCreate(BaseModel):
     protein_g: Optional[float] = Field(default=None, ge=0, le=2000)
     carbs_g: Optional[float] = Field(default=None, ge=0, le=2000)
     fat_g: Optional[float] = Field(default=None, ge=0, le=2000)
+    fdc_id: Optional[int] = None
 
 
 class NutritionLogResponse(BaseModel):
@@ -33,6 +34,7 @@ class NutritionLogResponse(BaseModel):
     protein_g: Optional[float] = None
     carbs_g: Optional[float] = None
     fat_g: Optional[float] = None
+    fdc_id: Optional[int] = None
 
     class Config:
         from_attributes = True

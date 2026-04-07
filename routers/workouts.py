@@ -51,6 +51,46 @@ def _get_last_session(
     )
 
 
+def _get_batch_last_sessions(
+    db: Session, user_id: int, exercise_names: list[str], before_date: date
+) -> dict[str, LastSessionData]:
+    """
+    Batch-fetch the most recent previous session for multiple exercises in one query.
+    Returns a dict mapping lowercase exercise_name -> LastSessionData.
+    """
+    if not exercise_names:
+        return {}
+
+    lower_names = [name.lower() for name in exercise_names]
+
+    # For each exercise name, find the most recent workout_set before the given date
+    # by joining on the max workout date per exercise.
+    results = (
+        db.query(WorkoutSet, Workout)
+        .join(Workout, WorkoutSet.workout_id == Workout.id)
+        .filter(
+            Workout.user_id == user_id,
+            func.lower(WorkoutSet.exercise_name).in_(lower_names),
+            Workout.date < before_date,
+        )
+        .order_by(Workout.date.desc(), WorkoutSet.id.desc())
+        .all()
+    )
+
+    # Build map: keep only the first (most recent) result per exercise name
+    last_sessions: dict[str, LastSessionData] = {}
+    for workout_set, workout in results:
+        key = workout_set.exercise_name.lower()
+        if key not in last_sessions:
+            last_sessions[key] = LastSessionData(
+                date=workout.date,
+                sets=workout_set.sets,
+                reps=workout_set.reps,
+                weight_kg=workout_set.weight_kg,
+            )
+    return last_sessions
+
+
 def _compute_totals(workout_sets: list) -> tuple:
     """Compute total_sets count and total_volume_kg for a list of WorkoutSet objects."""
     total_sets = len(workout_sets)
@@ -63,14 +103,20 @@ def _compute_totals(workout_sets: list) -> tuple:
 
 def _build_workout_response(db: Session, workout: Workout, user: User) -> dict:
     """Build a WorkoutResponse dict with sets and computed totals."""
+    # Batch-fetch last sessions for all exercises in one query
+    exercise_names = list({s.exercise_name for s in workout.sets})
+    last_sessions = _get_batch_last_sessions(
+        db, workout.user_id, exercise_names, workout.date
+    )
+
     sets_response = []
-    # TODO: batch last-session lookups to avoid N+1 queries
     for s in workout.sets:
-        last_session = _get_last_session(db, workout.user_id, s.exercise_name, workout.date)
+        last_session = last_sessions.get(s.exercise_name.lower())
         sets_response.append(
             WorkoutSetResponse(
                 id=s.id,
                 exercise_name=s.exercise_name,
+                exercise_id=s.exercise_id,
                 sets=s.sets,
                 reps=s.reps,
                 weight_kg=s.weight_kg,
@@ -145,6 +191,7 @@ def add_set(
     workout_set = WorkoutSet(
         workout_id=workout_id,
         exercise_name=data.exercise_name,
+        exercise_id=data.exercise_id,
         sets=data.sets,
         reps=data.reps,
         weight_kg=data.weight_kg,

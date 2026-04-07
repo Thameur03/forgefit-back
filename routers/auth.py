@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
+
+from limiter import limiter
 
 from database import get_db
 from models.user import User
@@ -23,7 +25,8 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(user_data: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register(request: Request, user_data: UserCreate, db: Session = Depends(get_db)):
     """
     Register a new user.
 
@@ -55,7 +58,8 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token, status_code=status.HTTP_200_OK)
-def login(login_data: LoginBody, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)):
     """
     Authenticate a user and return a JWT access token.
 
@@ -119,7 +123,8 @@ def update_profile(
 
 
 @router.post("/forgot-password", response_model=MessageResponse, status_code=status.HTTP_200_OK)
-def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def forgot_password(request: Request, data: ForgotPasswordRequest, db: Session = Depends(get_db)):
     """
     Request a password reset. Returns success message regardless of
     whether the email exists (security best practice).
@@ -129,7 +134,8 @@ def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/reset-password", response_model=MessageResponse, status_code=status.HTTP_200_OK)
-def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def reset_password(request: Request, data: ResetPasswordRequest, db: Session = Depends(get_db)):
     """
     Reset a user's password using the 6-digit code from forgot-password.
     """

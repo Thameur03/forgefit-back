@@ -5,6 +5,7 @@ from datetime import date
 
 class WorkoutSetCreate(BaseModel):
     exercise_name: str = Field(..., min_length=1, max_length=200)
+    exercise_id: Optional[str] = None
     sets: int
     reps: int
     weight_kg: Optional[float] = Field(default=None, ge=0, le=2000)
@@ -37,6 +38,7 @@ class LastSessionData(BaseModel):
 class WorkoutSetResponse(BaseModel):
     id: int
     exercise_name: str
+    exercise_id: Optional[str] = None
     sets: int
     reps: int
     weight_kg: Optional[float] = None

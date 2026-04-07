@@ -13,3 +13,4 @@ class NutritionLog(Base):
     protein_g = Column(Float, nullable=True)
     carbs_g = Column(Float, nullable=True)
     fat_g = Column(Float, nullable=True)
+    fdc_id = Column(Integer, nullable=True)

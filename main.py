@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from database import engine, Base
 from routers.auth import router as auth_router
 from routers.workouts import router as workouts_router
@@ -15,11 +17,16 @@ import models.token
 import models.program
 import os
 
+from limiter import limiter
+
 app = FastAPI(
     title="ForgeFit API",
     description="Backend for ForgeFit mobile app",
     version="1.0.0"
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS middleware — origins configurable via CORS_ORIGINS env variable
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -34,47 +41,7 @@ app.add_middleware(
 )
 
 # Auto-create tables in development only; use Alembic migrations in production
-from sqlalchemy import text
-
 Base.metadata.create_all(bind=engine)
-
-with engine.connect() as conn:
-    conn.execute(text("""
-      ALTER TABLE workouts 
-      ADD COLUMN IF NOT EXISTS 
-        name VARCHAR(255)
-    """))
-    conn.execute(text("""
-      ALTER TABLE workouts 
-      ADD COLUMN IF NOT EXISTS 
-        duration_seconds INTEGER DEFAULT 0
-    """))
-    conn.execute(text("""
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS
-        date_of_birth DATE
-    """))
-    conn.execute(text("""
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS
-        gender VARCHAR(20)
-    """))
-    conn.execute(text("""
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS
-        weight_kg FLOAT
-    """))
-    conn.execute(text("""
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS
-        height_cm FLOAT
-    """))
-    conn.execute(text("""
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS
-        fitness_level VARCHAR(20)
-    """))
-    conn.commit()
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])

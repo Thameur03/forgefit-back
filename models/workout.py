@@ -18,8 +18,9 @@ class WorkoutSet(Base):
     __tablename__ = "workout_sets"
 
     id = Column(Integer, primary_key=True, index=True)
-    workout_id = Column(Integer, ForeignKey("workouts.id"), nullable=False)
-    exercise_name = Column(String, nullable=False)
+    workout_id = Column(Integer, ForeignKey("workouts.id", ondelete="CASCADE"), nullable=False)
+    exercise_name = Column(String, index=True, nullable=False)
+    exercise_id = Column(String, index=True, nullable=True)
     sets = Column(Integer, nullable=False)
     reps = Column(Integer, nullable=False)
     weight_kg = Column(Float, nullable=True)

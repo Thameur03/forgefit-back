@@ -1,10 +1,13 @@
 import smtplib
+import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
@@ -15,7 +18,7 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 
 def _send_email(to_email: str, subject: str, body: str) -> None:
-    """Send an email using SMTP. Falls back to printing to terminal on failure."""
+    """Send an email using SMTP. Falls back to logging on failure."""
     try:
         msg = MIMEMultipart()
         msg["From"] = MAIL_FROM
@@ -27,12 +30,12 @@ def _send_email(to_email: str, subject: str, body: str) -> None:
             server.starttls()
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
             server.sendmail(MAIL_FROM, to_email, msg.as_string())
-        print(f"[EMAIL] Sent '{subject}' to {to_email}")
+        logger.info("Sent '%s' to %s", subject, to_email)
     except Exception as e:
-        print(f"[EMAIL ERROR] Failed to send email to {to_email}: {e}")
-        # Fallback: print code to terminal for development
+        logger.error("Failed to send email to %s: %s", to_email, e)
+        # Fallback: log code for development
         if DEBUG:
-            print(f"[DEV] Email content for {to_email}: {body}")
+            logger.debug("Email content for %s: %s", to_email, body)
 
 
 def send_verification_email(email: str, code: str) -> None:
@@ -40,7 +43,7 @@ def send_verification_email(email: str, code: str) -> None:
     subject = "ForgeFit - Verify your email"
     body = f"Your verification code is: {code}. Expires in 15 minutes."
     if DEBUG:
-        print(f"[DEV] Verification code for {email}: {code}")
+        logger.debug("Verification code for %s: %s", email, code)
     _send_email(email, subject, body)
 
 
@@ -49,5 +52,6 @@ def send_password_reset_email(email: str, code: str) -> None:
     subject = "ForgeFit - Password Reset"
     body = f"Your password reset code is: {code}. Expires in 15 minutes."
     if DEBUG:
-        print(f"[DEV] Password reset code for {email}: {code}")
+        logger.debug("Password reset code for %s: %s", email, code)
     _send_email(email, subject, body)
+

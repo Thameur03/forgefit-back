@@ -37,11 +37,15 @@ class ProgramDay(Base):
 
 class ProgramExercise(Base):
     __tablename__ = "program_exercises"
+
     id = Column(Integer, primary_key=True, index=True)
-    program_day_id = Column(Integer, ForeignKey("program_days.id"), nullable=False)
-    exercise_name = Column(String(255), nullable=False)
-    sets = Column(Integer, nullable=False, default=3)
-    reps = Column(Integer, nullable=False, default=8)
+    program_day_id = Column(Integer, ForeignKey("program_days.id", ondelete="CASCADE"), nullable=False)
+    
+    exercise_name = Column(String, nullable=False)
+    exercise_id = Column(String, nullable=True)
+    sets = Column(Integer, nullable=False)
+    reps = Column(Integer, nullable=False)
     weight_kg = Column(Float, nullable=True)
     order_index = Column(Integer, nullable=False, default=0)
+
     day = relationship("ProgramDay", back_populates="exercises")

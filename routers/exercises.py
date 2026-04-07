@@ -1,10 +1,11 @@
 import os
-import time
+import logging
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query, HTTPException, Path, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from cachetools import TTLCache
 import httpx
 
 from database import get_db
@@ -13,26 +14,13 @@ from models.workout import Workout, WorkoutSet
 from auth.utils import get_current_user
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 EXERCISEDB_URL = os.getenv("EXERCISEDB_URL", "https://exercisedb-apiii.vercel.app")
 
-_cache: dict = {}
-_cache_time: dict = {}
-CACHE_TTL = 3600  # 1 hour
-
-def _get_from_cache(key: str) -> Optional[Any]:
-    now = time.time()
-    if key in _cache and key in _cache_time:
-        if now - _cache_time[key] < CACHE_TTL:
-            return _cache[key]
-        else:
-            del _cache[key]
-            del _cache_time[key]
-    return None
-
-def _set_in_cache(key: str, value: Any):
-    _cache[key] = value
-    _cache_time[key] = time.time()
+# Bounded in-memory caches with automatic TTL eviction
+_search_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)   # 1 hour
+_detail_cache: TTLCache = TTLCache(maxsize=500, ttl=3600)   # 1 hour
 
 def _normalize_exercise(data: dict) -> dict:
     return {
@@ -52,9 +40,8 @@ def search_exercises(
     current_user: User = Depends(get_current_user),
 ):
     cache_key = f"search_{q}"
-    cached_result = _get_from_cache(cache_key)
-    if cached_result is not None:
-        return cached_result
+    if cache_key in _search_cache:
+        return _search_cache[cache_key]
     
     try:
         response = httpx.get(
@@ -68,11 +55,12 @@ def search_exercises(
         if data.get("success"):
             exercises = data.get("data", [])
             normalized = [_normalize_exercise(ex) for ex in exercises]
-            _set_in_cache(cache_key, normalized)
+            _search_cache[cache_key] = normalized
             return normalized
         return []
         
-    except Exception:
+    except Exception as e:
+        logger.warning("Exercise search failed for q='%s': %s", q, e)
         return []
 
 @router.get("/recent")
@@ -100,9 +88,8 @@ def get_exercise_by_id(
     current_user: User = Depends(get_current_user),
 ):
     cache_key = f"exercise_{exercise_id}"
-    cached_result = _get_from_cache(cache_key)
-    if cached_result is not None:
-        return cached_result
+    if cache_key in _detail_cache:
+        return _detail_cache[cache_key]
     
     try:
         response = httpx.get(
@@ -114,14 +101,18 @@ def get_exercise_by_id(
         
         if data.get("success") and "data" in data:
             normalized = _normalize_exercise(data["data"])
-            _set_in_cache(cache_key, normalized)
+            _detail_cache[cache_key] = normalized
             return normalized
         raise HTTPException(status_code=404, detail="Exercise not found")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             raise HTTPException(status_code=404, detail="Exercise not found")
+        logger.warning("Exercise detail fetch failed for id='%s': %s", exercise_id, e)
         raise HTTPException(status_code=503, detail="Exercise details unavailable")
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Exercise detail fetch failed for id='%s': %s", exercise_id, e)
         raise HTTPException(status_code=503, detail="Exercise details unavailable")
 
 @router.get("/{exercise_name}/history")
