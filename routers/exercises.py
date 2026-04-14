@@ -3,6 +3,7 @@ import logging
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query, HTTPException, Path, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from cachetools import TTLCache
@@ -81,6 +82,51 @@ def get_recent_exercises(
 
     exercises = [row[0] for row in results]
     return {"exercises": exercises}
+
+@router.get("/gif-proxy")
+async def proxy_exercise_gif(url: str):
+    """
+    Proxies ExerciseDB GIF requests so Flutter clients don't need the API key.
+    No authentication required (Image.network cannot send auth headers).
+    """
+    allowed_prefixes = (
+        "https://v2.exercisedb.io/",
+        EXERCISEDB_URL,
+    )
+    if not any(url.startswith(prefix) for prefix in allowed_prefixes):
+        raise HTTPException(status_code=400, detail="Invalid image URL")
+
+    async def stream_gif():
+        # follow_redirects=True is critical — the CDN often redirects
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+        ) as client:
+            try:
+                async with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        yield chunk
+            except Exception as e:
+                print(f"[ForgeFit] GIF proxy stream error for {url}: {e}")
+
+    # Detect content-type from HEAD request first so Flutter doesn't reject it
+    content_type = "image/gif"
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            head = await client.head(url)
+            ct = head.headers.get("content-type", "")
+            if ct:
+                content_type = ct.split(";")[0].strip()
+    except Exception:
+        pass  # Fall back to image/gif
+
+    return StreamingResponse(
+        content=stream_gif(),
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
 
 @router.get("/{exercise_id}")
 def get_exercise_by_id(
