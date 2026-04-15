@@ -91,6 +91,7 @@ async def proxy_exercise_gif(url: str):
     """
     allowed_prefixes = (
         "https://v2.exercisedb.io/",
+        "https://static.exercisedb.dev/",
         EXERCISEDB_URL,
     )
     if not any(url.startswith(prefix) for prefix in allowed_prefixes):
