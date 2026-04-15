@@ -224,7 +224,7 @@ def list_workouts(
         db.query(Workout)
         .options(joinedload(Workout.sets))
         .filter(Workout.user_id == current_user.id)
-        .order_by(Workout.date.desc())
+        .order_by(Workout.date.desc(), Workout.id.desc())
         .offset(offset)
         .limit(limit)
         .all()
