@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel
 
@@ -46,3 +46,17 @@ class DailyNutritionData(BaseModel):
     protein_g: float = 0.0
     carbs_g: float = 0.0
     fat_g: float = 0.0
+
+
+class MuscleVolumeResponse(BaseModel):
+    muscle_group: str
+    total_volume_kg: float
+    total_sets: int
+    percentage: float
+    previous_volume_kg: float
+    trend_percent: float
+
+
+class MuscleVolumeListResponse(BaseModel):
+    period_label: str
+    items: List[MuscleVolumeResponse]

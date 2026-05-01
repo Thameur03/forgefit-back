@@ -24,3 +24,8 @@ class User(Base):
     weight_kg = Column(Float, nullable=True)
     height_cm = Column(Float, nullable=True)
     fitness_level = Column(String(20), nullable=True)
+
+    # Admin / activity fields
+    role = Column(String(20), nullable=False, default="user", server_default="user")
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    last_logout_at = Column(DateTime(timezone=True), nullable=True)

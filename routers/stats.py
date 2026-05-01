@@ -15,10 +15,116 @@ from schemas.stats import (
     PersonalRecord,
     WeeklyWorkoutData,
     DailyNutritionData,
+    MuscleVolumeResponse,
+    MuscleVolumeListResponse,
 )
 from auth.utils import get_current_user
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Muscle Mapping — 40+ exercises, longer substrings checked first
+# ---------------------------------------------------------------------------
+
+MUSCLE_MAP: dict[str, str] = {
+    # Chest
+    "incline bench press": "Chest",
+    "decline bench press": "Chest",
+    "bench press": "Chest",
+    "chest fly": "Chest",
+    "chest press": "Chest",
+    "cable crossover": "Chest",
+    "pec deck": "Chest",
+    "push-up": "Chest",
+    "pushup": "Chest",
+    "dips": "Chest",
+    # Back
+    "lat pulldown": "Back",
+    "seated row": "Back",
+    "cable row": "Back",
+    "t-bar row": "Back",
+    "barbell row": "Back",
+    "dumbbell row": "Back",
+    "pull-up": "Back",
+    "pullup": "Back",
+    "chin-up": "Back",
+    "chinup": "Back",
+    "hyperextension": "Back",
+    "deadlift": "Back",
+    "row": "Back",
+    # Shoulders
+    "shoulder press": "Shoulders",
+    "arnold press": "Shoulders",
+    "overhead press": "Shoulders",
+    "military press": "Shoulders",
+    "lateral raise": "Shoulders",
+    "front raise": "Shoulders",
+    "face pull": "Shoulders",
+    "upright row": "Shoulders",
+    "shrug": "Shoulders",
+    # Biceps
+    "preacher curl": "Biceps",
+    "concentration curl": "Biceps",
+    "hammer curl": "Biceps",
+    "barbell curl": "Biceps",
+    "incline curl": "Biceps",
+    "curl": "Biceps",
+    # Triceps
+    "skull crusher": "Triceps",
+    "close grip bench": "Triceps",
+    "tricep pushdown": "Triceps",
+    "tricep extension": "Triceps",
+    "overhead tricep": "Triceps",
+    "tricep": "Triceps",
+    # Abs
+    "russian twist": "Abs",
+    "leg raise": "Abs",
+    "hanging knee": "Abs",
+    "cable crunch": "Abs",
+    "crunch": "Abs",
+    "sit-up": "Abs",
+    "situp": "Abs",
+    "plank": "Abs",
+    "ab rollout": "Abs",
+    # Quads
+    "leg extension": "Quads",
+    "hack squat": "Quads",
+    "front squat": "Quads",
+    "leg press": "Quads",
+    "lunge": "Quads",
+    "step-up": "Quads",
+    "squat": "Quads",
+    # Hamstrings
+    "leg curl": "Hamstrings",
+    "romanian deadlift": "Hamstrings",
+    "rdl": "Hamstrings",
+    "good morning": "Hamstrings",
+    "nordic curl": "Hamstrings",
+    "stiff leg": "Hamstrings",
+    # Glutes
+    "hip thrust": "Glutes",
+    "glute bridge": "Glutes",
+    "glute kickback": "Glutes",
+    "cable kickback": "Glutes",
+    # Calves
+    "seated calf": "Calves",
+    "standing calf": "Calves",
+    "calf raise": "Calves",
+    "calf press": "Calves",
+}
+
+# Keys sorted by length descending — longer substrings match before shorter ones
+_SORTED_KEYS = sorted(MUSCLE_MAP.keys(), key=len, reverse=True)
+
+
+def _classify(exercise_name: str) -> str:
+    """Return the canonical muscle group for the given exercise name."""
+    lower = exercise_name.lower()
+    for key in _SORTED_KEYS:
+        if key in lower:
+            return MUSCLE_MAP[key]
+    return "Other"
+
 
 
 # ---------------------------------------------------------------------------
@@ -378,3 +484,120 @@ def get_nutrition_trend(
         )
         for row in daily_rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Muscle Volume
+# ---------------------------------------------------------------------------
+
+_PERIOD_CONFIG: dict[str, tuple[int, str]] = {
+    "1w": (7, "Last 7 days"),
+    "1m": (30, "Last 30 days"),
+    "3m": (90, "Last 3 months"),
+    "6m": (180, "Last 6 months"),
+    "1y": (365, "Last year"),
+}
+
+
+def _aggregate_muscle_sets(
+    sets_data: list,
+    workout_date_map: dict,
+    start: date,
+    end: date,
+) -> dict[str, dict]:
+    """Aggregate volume and set count per muscle group within [start, end)."""
+    result: dict[str, dict] = defaultdict(lambda: {"volume": 0.0, "sets": 0})
+    for s in sets_data:
+        w_date = workout_date_map.get(s.workout_id)
+        if w_date is None or not (start <= w_date < end):
+            continue
+        muscle = _classify(s.exercise_name)
+        if s.weight_kg is not None:
+            result[muscle]["volume"] += s.sets * s.reps * s.weight_kg
+        result[muscle]["sets"] += s.sets
+    return result
+
+
+@router.get(
+    "/muscle-volume",
+    response_model=MuscleVolumeListResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_muscle_volume(
+    period: str = Query("1m", pattern="^(1w|1m|3m|6m|1y)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get per-muscle-group volume breakdown for the requested period.
+
+    Also returns previous-period data so the frontend can show trends.
+    Exercises are classified via substring matching against MUSCLE_MAP.
+    """
+    today = date.today()
+    days, period_label = _PERIOD_CONFIG.get(period, (30, "Last 30 days"))
+
+    # Current period dates
+    end_date = today + timedelta(days=1)       # exclusive upper bound
+    start_date = today - timedelta(days=days)
+
+    # Previous period dates (same length, immediately before)
+    prev_end_date = start_date
+    prev_start_date = start_date - timedelta(days=days)
+
+    # Fetch all workouts in the combined window (prev + current)
+    combined_start = prev_start_date
+    workouts = (
+        db.query(Workout)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.date >= combined_start,
+            Workout.date < end_date,
+        )
+        .all()
+    )
+    if not workouts:
+        return MuscleVolumeListResponse(period_label=period_label, items=[])
+
+    workout_ids = [w.id for w in workouts]
+    workout_date_map = {w.id: w.date for w in workouts}
+
+    sets_data = (
+        db.query(WorkoutSet)
+        .filter(WorkoutSet.workout_id.in_(workout_ids))
+        .all()
+    )
+
+    # Aggregate current and previous periods
+    current_agg = _aggregate_muscle_sets(sets_data, workout_date_map, start_date, end_date)
+    prev_agg = _aggregate_muscle_sets(sets_data, workout_date_map, prev_start_date, prev_end_date)
+
+    if not current_agg:
+        return MuscleVolumeListResponse(period_label=period_label, items=[])
+
+    total_volume = sum(v["volume"] for v in current_agg.values()) or 1.0
+
+    items: list[MuscleVolumeResponse] = []
+    for muscle, data in current_agg.items():
+        cur_vol = data["volume"]
+        prev_vol = prev_agg.get(muscle, {}).get("volume", 0.0)
+        if prev_vol > 0:
+            trend = round((cur_vol - prev_vol) / prev_vol * 100, 1)
+        elif cur_vol > 0:
+            trend = 100.0
+        else:
+            trend = 0.0
+
+        items.append(
+            MuscleVolumeResponse(
+                muscle_group=muscle,
+                total_volume_kg=round(cur_vol, 2),
+                total_sets=data["sets"],
+                percentage=round(cur_vol / total_volume * 100, 1),
+                previous_volume_kg=round(prev_vol, 2),
+                trend_percent=trend,
+            )
+        )
+
+    items.sort(key=lambda x: x.total_volume_kg, reverse=True)
+    return MuscleVolumeListResponse(period_label=period_label, items=items)
+

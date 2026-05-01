@@ -4,8 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 import httpx
 from cachetools import TTLCache
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
+from database import get_db
 from models.user import User
+from models.food import Food
 from auth.utils import get_current_user
 
 load_dotenv()
@@ -260,3 +263,34 @@ async def get_food_nutrients(
             detail="USDA food service is temporarily unavailable. Please try again later.",
         )
 
+
+@router.get("/local")
+def search_local_food(
+    search: str = Query("", description="Search term for local admin-managed foods"),
+    limit: int = Query(25, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Search local admin-managed foods by name or brand.
+    Returns active foods only. Does not call USDA.
+    """
+    query = db.query(Food).filter(Food.is_active == True)
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter((Food.name.ilike(pattern)) | (Food.brand.ilike(pattern)))
+    foods = query.order_by(Food.name.asc()).limit(limit).all()
+    return [
+        {
+            "id": f.id,
+            "name": f.name,
+            "brand": f.brand,
+            "calories": f.calories,
+            "protein_g": f.protein_g,
+            "carbs_g": f.carbs_g,
+            "fat_g": f.fat_g,
+            "serving_size_g": f.serving_size_g,
+            "source": "local",
+        }
+        for f in foods
+    ]

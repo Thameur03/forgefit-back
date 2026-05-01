@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from auth.utils import get_current_user
 from database import get_db
 from models.program import Program, ProgramDay, ProgramExercise
+from models.admin import ProgramTemplate, ProgramTemplateDay, ProgramTemplateExercise
 from models.user import User
 
 from schemas.program import (
@@ -21,6 +22,7 @@ from schemas.program import (
 )
 
 router = APIRouter()
+
 
 # ---------------------------------------------------------------------------
 # Hardcoded Templates
@@ -319,6 +321,102 @@ def _assert_ownership(program: Program, current_user: User) -> None:
 def get_templates():
     """Return all hardcoded program templates. No auth required."""
     return TEMPLATES
+
+
+@router.get("/global-templates", status_code=status.HTTP_200_OK)
+def get_global_templates(db: Session = Depends(get_db)):
+    """Return all active admin-managed program templates from the database."""
+    templates = (
+        db.query(ProgramTemplate)
+        .filter(ProgramTemplate.is_active == True)
+        .order_by(ProgramTemplate.id.asc())
+        .all()
+    )
+    return [
+        {
+            "id": t.id,
+            "name": t.name,
+            "description": t.description,
+            "weeks": t.weeks,
+            "days_per_week": t.days_per_week,
+            "difficulty": t.difficulty,
+            "goal": t.goal,
+            "days": [
+                {
+                    "day_number": d.day_number,
+                    "day_name": d.day_name,
+                    "order_index": d.order_index,
+                    "exercises": [
+                        {
+                            "exercise_name": e.exercise_name,
+                            "exercise_id": e.exercise_id,
+                            "sets": e.sets,
+                            "reps": e.reps,
+                            "rest_seconds": e.rest_seconds,
+                            "order_index": e.order_index,
+                        }
+                        for e in d.exercises
+                    ],
+                }
+                for d in t.days
+            ],
+        }
+        for t in templates
+    ]
+
+
+@router.post(
+    "/from-db-template/{template_id}",
+    response_model=ProgramResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_from_db_template(
+    template_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Copy a DB-managed template into the user's own program."""
+    template = db.query(ProgramTemplate).filter(ProgramTemplate.id == template_id, ProgramTemplate.is_active == True).first()
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    full_name = getattr(current_user, "full_name", None) or current_user.email
+    program = Program(
+        user_id=current_user.id,
+        name=f"{full_name}'s {template.name}",
+        weeks=template.weeks,
+        days_per_week=template.days_per_week,
+        is_active=False,
+        source_template=f"db_{template.id}",
+    )
+    db.add(program)
+    db.flush()
+
+    for day_data in sorted(template.days, key=lambda d: d.order_index):
+        day = ProgramDay(
+            program_id=program.id,
+            day_number=day_data.day_number,
+            day_name=day_data.day_name,
+        )
+        db.add(day)
+        db.flush()
+
+        for ex_data in sorted(day_data.exercises, key=lambda e: e.order_index):
+            exercise = ProgramExercise(
+                program_day_id=day.id,
+                exercise_name=ex_data.exercise_name,
+                exercise_id=ex_data.exercise_id,
+                sets=ex_data.sets,
+                reps=ex_data.reps,
+                weight_kg=None,
+                order_index=ex_data.order_index,
+            )
+            db.add(exercise)
+
+    db.commit()
+    db.refresh(program)
+    return program
+
 
 
 @router.post(

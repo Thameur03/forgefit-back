@@ -42,9 +42,13 @@ class UserResponse(BaseModel):
     weight_kg: Optional[float] = None
     height_cm: Optional[float] = None
     fitness_level: Optional[str] = None
+    role: str = "user"
+    last_login_at: Optional[datetime] = None
+    last_logout_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
 
 
 class Token(BaseModel):
