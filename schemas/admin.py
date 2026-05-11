@@ -7,6 +7,8 @@ class DashboardResponse(BaseModel):
     total_users: int
     admin_users: int
     normal_users: int
+    verified_users: int
+    unverified_users: int
     recently_active_users: int
     logged_out_users: int
     total_program_templates: int
@@ -20,6 +22,7 @@ class AdminUserResponse(BaseModel):
     email: str
     full_name: str
     role: str
+    is_verified: bool = False
     created_at: datetime
     last_login_at: Optional[datetime] = None
     last_logout_at: Optional[datetime] = None

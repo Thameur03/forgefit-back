@@ -47,6 +47,8 @@ def get_dashboard(
     total_users = db.query(User).count()
     admin_users = db.query(User).filter(User.role == "admin").count()
     normal_users = db.query(User).filter(User.role == "user").count()
+    verified_users = db.query(User).filter(User.is_verified == True).count()
+    unverified_users = db.query(User).filter(User.is_verified == False).count()
 
     recently_active_users = (
         db.query(User)
@@ -71,6 +73,8 @@ def get_dashboard(
         total_users=total_users,
         admin_users=admin_users,
         normal_users=normal_users,
+        verified_users=verified_users,
+        unverified_users=unverified_users,
         recently_active_users=recently_active_users,
         logged_out_users=logged_out_users,
         total_program_templates=total_program_templates,

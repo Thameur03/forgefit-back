@@ -19,6 +19,7 @@ from models.workout import Workout, WorkoutSet
 from models.program import Program, ProgramDay, ProgramExercise
 from models.nutrition import NutritionLog
 from models.token import RevokedToken
+from models.schedule import ScheduledWorkout
 
 target_metadata = database.Base.metadata
 

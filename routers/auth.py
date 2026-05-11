@@ -1,3 +1,5 @@
+import random
+import string
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -14,15 +16,28 @@ from schemas.user import (
     UserCreate, UserResponse, Token, LoginBody,
     ForgotPasswordRequest, ResetPasswordRequest, MessageResponse,
     RefreshTokenRequest, LogoutRequest, UserProfileUpdate,
+    VerifyEmailRequest, ResendVerificationRequest,
 )
 from auth.utils import (
     hash_password, verify_password, create_access_token,
     get_current_user, create_refresh_token, is_token_revoked,
     SECRET_KEY, ALGORITHM,
 )
+from auth.email import send_verification_email, send_password_reset_email
 
 router = APIRouter()
 
+OTP_EXPIRY_MINUTES = 15
+
+
+def _generate_otp(length: int = 6) -> str:
+    """Generate a random numeric OTP."""
+    return "".join(random.choices(string.digits, k=length))
+
+
+# ═══════════════════════════════════════════════════════════
+# REGISTER
+# ═══════════════════════════════════════════════════════════
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
@@ -30,8 +45,8 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
     """
     Register a new user.
 
-    Accepts email, password, and full_name. Returns the created user
-    without the password. Raises 400 if the email is already registered.
+    Creates the account with is_verified=False, generates a verification
+    OTP, hashes it, stores it with expiration, and sends it via email.
     """
     existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
@@ -40,11 +55,16 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
             detail="Email already registered",
         )
 
+    # Generate and hash verification OTP
+    otp = _generate_otp()
+
     new_user = User(
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
         full_name=user_data.full_name,
-        is_verified=True,
+        is_verified=False,
+        verification_code=hash_password(otp),
+        verification_code_expires=datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES),
         date_of_birth=user_data.date_of_birth,
         gender=user_data.gender,
         weight_kg=user_data.weight_kg,
@@ -54,18 +74,84 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # Send verification email (non-blocking — errors are logged, not raised)
+    send_verification_email(new_user.email, otp)
+
     return new_user
 
+
+# ═══════════════════════════════════════════════════════════
+# VERIFY EMAIL
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/verify-email", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
+def verify_email(request: Request, data: VerifyEmailRequest, db: Session = Depends(get_db)):
+    """Verify a user's email using the 6-digit OTP."""
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification code",
+        )
+
+    if user.is_verified:
+        return {"message": "Email is already verified"}
+
+    if (
+        user.verification_code is None
+        or user.verification_code_expires is None
+        or datetime.now(timezone.utc) > user.verification_code_expires
+        or not verify_password(data.code, user.verification_code)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification code",
+        )
+
+    user.is_verified = True
+    user.verification_code = None
+    user.verification_code_expires = None
+    db.commit()
+
+    return {"message": "Email verified successfully"}
+
+
+# ═══════════════════════════════════════════════════════════
+# RESEND VERIFICATION CODE
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/resend-verification-code", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+@limiter.limit("3/minute")
+def resend_verification_code(request: Request, data: ResendVerificationRequest, db: Session = Depends(get_db)):
+    """Resend the email verification OTP. Returns generic message to avoid email enumeration."""
+    user = db.query(User).filter(User.email == data.email).first()
+
+    if user and user.is_verified:
+        return {"message": "Email is already verified"}
+
+    if user and not user.is_verified:
+        otp = _generate_otp()
+        user.verification_code = hash_password(otp)
+        user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        db.commit()
+        send_verification_email(user.email, otp)
+
+    # Always return a generic message
+    return {"message": "If this email is registered, a new verification code has been sent"}
+
+
+# ═══════════════════════════════════════════════════════════
+# LOGIN
+# ═══════════════════════════════════════════════════════════
 
 @router.post("/login", response_model=Token, status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
 def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)):
     """
     Authenticate a user and return a JWT access token.
-
-    Accepts email and password as JSON body. Returns an access token
-    if credentials are valid. Raises 401 if email not found or password
-    is incorrect.
+    Blocks unverified users with a 403 status.
     """
     user = db.query(User).filter(User.email == login_data.email).first()
     if not user:
@@ -80,6 +166,13 @@ def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)
             detail="Invalid email or password",
         )
 
+    # Block login for unverified users
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email before logging in.",
+        )
+
     # Track last login time
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
@@ -89,17 +182,19 @@ def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
+# ═══════════════════════════════════════════════════════════
+# GET ME
+# ═══════════════════════════════════════════════════════════
 
 @router.get("/me", response_model=UserResponse, status_code=status.HTTP_200_OK)
 def get_me(current_user: User = Depends(get_current_user)):
-    """
-    Get the currently authenticated user's profile.
-
-    Requires a valid JWT Bearer token in the Authorization header.
-    Returns the user's profile information without the password.
-    """
+    """Get the currently authenticated user's profile."""
     return current_user
 
+
+# ═══════════════════════════════════════════════════════════
+# UPDATE PROFILE
+# ═══════════════════════════════════════════════════════════
 
 @router.put("/profile", response_model=UserResponse)
 def update_profile(
@@ -107,9 +202,7 @@ def update_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Update the current user's profile. Only provided (non-None) fields are updated.
-    """
+    """Update the current user's profile. Only provided (non-None) fields are updated."""
     if profile.full_name is not None:
         current_user.full_name = profile.full_name
     if profile.date_of_birth is not None:
@@ -127,23 +220,36 @@ def update_profile(
     return current_user
 
 
+# ═══════════════════════════════════════════════════════════
+# FORGOT PASSWORD
+# ═══════════════════════════════════════════════════════════
+
 @router.post("/forgot-password", response_model=MessageResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("3/minute")
 def forgot_password(request: Request, data: ForgotPasswordRequest, db: Session = Depends(get_db)):
     """
-    Request a password reset. Returns success message regardless of
-    whether the email exists (security best practice).
-    Email sending will be added post-launch.
+    Request a password reset OTP. Always returns a generic success message
+    regardless of whether the email exists (security best practice).
     """
+    user = db.query(User).filter(User.email == data.email).first()
+    if user:
+        otp = _generate_otp()
+        user.reset_password_code = hash_password(otp)
+        user.reset_password_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        db.commit()
+        send_password_reset_email(user.email, otp)
+
     return {"message": "If this email exists, a reset code has been sent"}
 
+
+# ═══════════════════════════════════════════════════════════
+# RESET PASSWORD
+# ═══════════════════════════════════════════════════════════
 
 @router.post("/reset-password", response_model=MessageResponse, status_code=status.HTTP_200_OK)
 @limiter.limit("3/minute")
 def reset_password(request: Request, data: ResetPasswordRequest, db: Session = Depends(get_db)):
-    """
-    Reset a user's password using the 6-digit code from forgot-password.
-    """
+    """Reset a user's password using the 6-digit code from forgot-password."""
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
         raise HTTPException(
@@ -166,6 +272,10 @@ def reset_password(request: Request, data: ResetPasswordRequest, db: Session = D
     db.commit()
     return {"message": "Password reset successfully"}
 
+
+# ═══════════════════════════════════════════════════════════
+# REFRESH
+# ═══════════════════════════════════════════════════════════
 
 @router.post("/refresh", response_model=Token, status_code=status.HTTP_200_OK)
 def refresh_tokens(data: RefreshTokenRequest, db: Session = Depends(get_db)):
@@ -210,6 +320,10 @@ def refresh_tokens(data: RefreshTokenRequest, db: Session = Depends(get_db)):
         "token_type": "bearer",
     }
 
+
+# ═══════════════════════════════════════════════════════════
+# LOGOUT
+# ═══════════════════════════════════════════════════════════
 
 @router.post("/logout", response_model=MessageResponse, status_code=status.HTTP_200_OK)
 def logout(

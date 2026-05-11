@@ -37,6 +37,7 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     created_at: datetime
+    is_verified: bool = False
     date_of_birth: Optional[date] = None
     gender: Optional[str] = None
     weight_kg: Optional[float] = None
@@ -114,6 +115,25 @@ class RefreshTokenRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class UserProfileUpdate(BaseModel):

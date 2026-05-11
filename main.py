@@ -11,6 +11,7 @@ from routers.food_search import router as food_search_router
 from routers.stats import router as stats_router
 from routers.programs import router as programs_router
 from routers.admin import router as admin_router
+from routers.schedule import router as schedule_router
 import models.user
 import models.workout
 import models.nutrition
@@ -18,6 +19,7 @@ import models.token
 import models.program
 import models.admin
 import models.food
+import models.schedule
 import os
 
 from limiter import limiter
@@ -55,6 +57,7 @@ app.include_router(food_search_router, prefix="/food", tags=["Food Search"])
 app.include_router(stats_router, prefix="/stats", tags=["Statistics"])
 app.include_router(programs_router, prefix="/programs", tags=["Programs"])
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
+app.include_router(schedule_router, prefix="/schedule", tags=["Schedule"])
 
 
 @app.get("/health")
