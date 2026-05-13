@@ -60,3 +60,56 @@ class MuscleVolumeResponse(BaseModel):
 class MuscleVolumeListResponse(BaseModel):
     period_label: str
     items: List[MuscleVolumeResponse]
+
+
+# ── Nutrition Dashboard ──────────────────────────────────────────────────────
+
+class MacroSplitSchema(BaseModel):
+    protein_percent: float = 0.0
+    carbs_percent: float = 0.0
+    fat_percent: float = 0.0
+
+
+class CalorieConsistencySchema(BaseModel):
+    standard_deviation: Optional[float] = None
+    coefficient_of_variation: Optional[float] = None
+    label: str = "Not enough data"
+
+
+class NutritionDailyPoint(BaseModel):
+    date: date
+    calories: float = 0.0
+    protein_g: float = 0.0
+    carbs_g: float = 0.0
+    fat_g: float = 0.0
+
+
+class NutritionPeriodSummary(BaseModel):
+    average_calories: float = 0.0
+    average_protein_g: float = 0.0
+
+
+class NutritionDashboardResponse(BaseModel):
+    period_days: int = 14
+    logged_days: int = 0
+    logging_consistency_percent: float = 0.0
+
+    average_calories: float = 0.0
+    average_protein_g: float = 0.0
+    average_carbs_g: float = 0.0
+    average_fat_g: float = 0.0
+
+    protein_per_kg: Optional[float] = None
+
+    macro_split: MacroSplitSchema = MacroSplitSchema()
+
+    current_period: NutritionPeriodSummary = NutritionPeriodSummary()
+    previous_period: NutritionPeriodSummary = NutritionPeriodSummary()
+
+    calorie_change_percent: float = 0.0
+    protein_change_percent: float = 0.0
+
+    calorie_consistency: CalorieConsistencySchema = CalorieConsistencySchema()
+
+    daily_points: List[NutritionDailyPoint] = []
+    insights: List[str] = []

@@ -1,8 +1,8 @@
 from enum import Enum
-from datetime import date
+from datetime import date as _Date
 from typing import Optional, List, Dict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class MealType(str, Enum):
@@ -14,8 +14,12 @@ class MealType(str, Enum):
 
 
 class NutritionLogCreate(BaseModel):
-    date: Optional[date] = None  # defaults to today in the endpoint
-    meal_name: str = Field(..., min_length=1, max_length=100)  # plain str — any meal name accepted
+    # IMPORTANT: field named 'date' must NOT shadow the type annotation.
+    # Use the _Date alias imported above so Pydantic v2 resolves the type
+    # correctly instead of collapsing it to NoneType (which would cause the
+    # "Input should be None" validation error when a real date string is sent).
+    date: Optional[_Date] = None   # defaults to today in the endpoint
+    meal_name: str = Field(..., min_length=1, max_length=100)
     food_name: str = Field(..., min_length=1, max_length=200)
     calories: float = Field(..., gt=0, le=10000)
     protein_g: Optional[float] = Field(default=None, ge=0, le=2000)
@@ -27,7 +31,7 @@ class NutritionLogCreate(BaseModel):
 class NutritionLogResponse(BaseModel):
     id: int
     user_id: int
-    date: date
+    date: _Date
     meal_name: str
     food_name: str
     calories: float
@@ -41,7 +45,7 @@ class NutritionLogResponse(BaseModel):
 
 
 class DailySummary(BaseModel):
-    date: date
+    date: _Date
     total_calories: float = 0.0
     total_protein_g: float = 0.0
     total_carbs_g: float = 0.0

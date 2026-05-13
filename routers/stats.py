@@ -17,6 +17,11 @@ from schemas.stats import (
     DailyNutritionData,
     MuscleVolumeResponse,
     MuscleVolumeListResponse,
+    NutritionDashboardResponse,
+    MacroSplitSchema,
+    CalorieConsistencySchema,
+    NutritionDailyPoint,
+    NutritionPeriodSummary,
 )
 from auth.utils import get_current_user
 
@@ -124,6 +129,15 @@ def _classify(exercise_name: str) -> str:
         if key in lower:
             return MUSCLE_MAP[key]
     return "Other"
+
+
+def _percent_change(current: float, previous: float) -> float:
+    """Calculate percentage change, safe for zero previous."""
+    if previous == 0 and current == 0:
+        return 0.0
+    if previous == 0 and current > 0:
+        return 100.0
+    return ((current - previous) / previous) * 100.0
 
 
 
@@ -484,6 +498,227 @@ def get_nutrition_trend(
         )
         for row in daily_rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Nutrition Dashboard
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/nutrition-dashboard",
+    response_model=NutritionDashboardResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_nutrition_dashboard(
+    days: int = Query(14, ge=7, le=90, description="Period length in days"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Consolidated nutrition analytics dashboard.
+
+    Computes averages, macro split, logging consistency, calorie consistency,
+    protein per kg, trend data with zero-fill, and insight messages.
+    """
+    import math
+
+    today = date.today()
+
+    # ── Periods ─────────────────────────────────────────────────────────────
+    current_start = today - timedelta(days=days - 1)  # inclusive
+    prev_end = current_start - timedelta(days=1)       # inclusive
+    prev_start = prev_end - timedelta(days=days - 1)   # inclusive
+
+    # ── Fetch raw daily aggregates for current period ───────────────────────
+    current_rows = (
+        db.query(
+            NutritionLog.date,
+            func.sum(NutritionLog.calories).label("cal"),
+            func.sum(NutritionLog.protein_g).label("pro"),
+            func.sum(NutritionLog.carbs_g).label("carbs"),
+            func.sum(NutritionLog.fat_g).label("fat"),
+        )
+        .filter(
+            NutritionLog.user_id == current_user.id,
+            NutritionLog.date >= current_start,
+            NutritionLog.date <= today,
+        )
+        .group_by(NutritionLog.date)
+        .all()
+    )
+
+    # Previous period
+    prev_rows = (
+        db.query(
+            NutritionLog.date,
+            func.sum(NutritionLog.calories).label("cal"),
+            func.sum(NutritionLog.protein_g).label("pro"),
+        )
+        .filter(
+            NutritionLog.user_id == current_user.id,
+            NutritionLog.date >= prev_start,
+            NutritionLog.date <= prev_end,
+        )
+        .group_by(NutritionLog.date)
+        .all()
+    )
+
+    # ── Empty state ─────────────────────────────────────────────────────────
+    if not current_rows:
+        # Build zero-filled daily points
+        all_dates = [
+            current_start + timedelta(days=i) for i in range(days)
+        ]
+        return NutritionDashboardResponse(
+            period_days=days,
+            daily_points=[
+                NutritionDailyPoint(date=d) for d in all_dates
+            ],
+            insights=["No nutrition data for this period. Log meals to unlock insights."],
+        )
+
+    # ── Build lookup of current-period logged days ──────────────────────────
+    logged_map: dict[date, dict] = {}
+    for row in current_rows:
+        logged_map[row.date] = {
+            "cal": float(row.cal or 0),
+            "pro": float(row.pro or 0),
+            "carbs": float(row.carbs or 0),
+            "fat": float(row.fat or 0),
+        }
+
+    logged_days = len(logged_map)
+    logging_consistency = round(logged_days / days * 100, 1)
+
+    # Totals over logged days
+    total_cal = sum(v["cal"] for v in logged_map.values())
+    total_pro = sum(v["pro"] for v in logged_map.values())
+    total_carbs = sum(v["carbs"] for v in logged_map.values())
+    total_fat = sum(v["fat"] for v in logged_map.values())
+
+    avg_cal = round(total_cal / logged_days, 1)
+    avg_pro = round(total_pro / logged_days, 1)
+    avg_carbs = round(total_carbs / logged_days, 1)
+    avg_fat = round(total_fat / logged_days, 1)
+
+    # ── Protein per kg ──────────────────────────────────────────────────────
+    protein_per_kg = None
+    weight = getattr(current_user, "weight_kg", None)
+    if weight and weight > 0:
+        protein_per_kg = round(avg_pro / weight, 2)
+
+    # ── Macro split ─────────────────────────────────────────────────────────
+    pro_kcal = avg_pro * 4
+    carb_kcal = avg_carbs * 4
+    fat_kcal = avg_fat * 9
+    macro_total = pro_kcal + carb_kcal + fat_kcal
+
+    if macro_total > 0:
+        macro_split = MacroSplitSchema(
+            protein_percent=round(pro_kcal / macro_total * 100, 1),
+            carbs_percent=round(carb_kcal / macro_total * 100, 1),
+            fat_percent=round(fat_kcal / macro_total * 100, 1),
+        )
+    else:
+        macro_split = MacroSplitSchema()
+
+    # ── Previous period averages ────────────────────────────────────────────
+    prev_logged = len(prev_rows)
+    if prev_logged > 0:
+        prev_avg_cal = sum(float(r.cal or 0) for r in prev_rows) / prev_logged
+        prev_avg_pro = sum(float(r.pro or 0) for r in prev_rows) / prev_logged
+    else:
+        prev_avg_cal = 0.0
+        prev_avg_pro = 0.0
+
+    cal_change = round(_percent_change(avg_cal, prev_avg_cal), 1)
+    pro_change = round(_percent_change(avg_pro, prev_avg_pro), 1)
+
+    # ── Calorie consistency (logged days only) ──────────────────────────────
+    if logged_days >= 3:
+        daily_cals = [v["cal"] for v in logged_map.values()]
+        mean_cal = sum(daily_cals) / len(daily_cals)
+        variance = sum((c - mean_cal) ** 2 for c in daily_cals) / len(daily_cals)
+        std_dev = round(math.sqrt(variance), 1)
+        cv = round(std_dev / mean_cal, 2) if mean_cal > 0 else 0.0
+
+        if cv < 0.15:
+            cv_label = "Very consistent"
+        elif cv <= 0.25:
+            cv_label = "Moderately consistent"
+        else:
+            cv_label = "Highly variable"
+
+        calorie_consistency = CalorieConsistencySchema(
+            standard_deviation=std_dev,
+            coefficient_of_variation=cv,
+            label=cv_label,
+        )
+    else:
+        calorie_consistency = CalorieConsistencySchema()
+
+    # ── Daily points (zero-filled) ──────────────────────────────────────────
+    daily_points = []
+    for i in range(days):
+        d = current_start + timedelta(days=i)
+        entry = logged_map.get(d)
+        if entry:
+            daily_points.append(NutritionDailyPoint(
+                date=d,
+                calories=round(entry["cal"], 1),
+                protein_g=round(entry["pro"], 1),
+                carbs_g=round(entry["carbs"], 1),
+                fat_g=round(entry["fat"], 1),
+            ))
+        else:
+            daily_points.append(NutritionDailyPoint(date=d))
+
+    # ── Insights ────────────────────────────────────────────────────────────
+    insights: list[str] = []
+
+    if cal_change > 10:
+        insights.append("Calories increased compared to the previous period.")
+    elif cal_change < -10:
+        insights.append("Calories decreased compared to the previous period.")
+    else:
+        insights.append("Calories are stable compared to the previous period.")
+
+    if pro_change > 10:
+        insights.append("Protein intake improved compared to the previous period.")
+    elif pro_change < -10:
+        insights.append("Protein intake dropped compared to the previous period.")
+    else:
+        insights.append("Protein intake is stable.")
+
+    if logging_consistency >= 80:
+        insights.append("Logging consistency is good.")
+    elif logging_consistency >= 50:
+        insights.append("Logging consistency is moderate.")
+    else:
+        insights.append("Logging consistency is low. More complete logging improves insights.")
+
+    return NutritionDashboardResponse(
+        period_days=days,
+        logged_days=logged_days,
+        logging_consistency_percent=logging_consistency,
+        average_calories=avg_cal,
+        average_protein_g=avg_pro,
+        average_carbs_g=avg_carbs,
+        average_fat_g=avg_fat,
+        protein_per_kg=protein_per_kg,
+        macro_split=macro_split,
+        current_period=NutritionPeriodSummary(
+            average_calories=avg_cal, average_protein_g=avg_pro,
+        ),
+        previous_period=NutritionPeriodSummary(
+            average_calories=round(prev_avg_cal, 1),
+            average_protein_g=round(prev_avg_pro, 1),
+        ),
+        calorie_change_percent=cal_change,
+        protein_change_percent=pro_change,
+        calorie_consistency=calorie_consistency,
+        daily_points=daily_points,
+        insights=insights,
+    )
 
 
 # ---------------------------------------------------------------------------
