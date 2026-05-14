@@ -343,11 +343,13 @@ def get_global_templates(db: Session = Depends(get_db)):
             "goal": t.goal,
             "days": [
                 {
+                    "id": d.id,
                     "day_number": d.day_number,
                     "day_name": d.day_name,
                     "order_index": d.order_index,
                     "exercises": [
                         {
+                            "id": e.id,
                             "exercise_name": e.exercise_name,
                             "exercise_id": e.exercise_id,
                             "sets": e.sets,
@@ -363,6 +365,7 @@ def get_global_templates(db: Session = Depends(get_db)):
         }
         for t in templates
     ]
+
 
 
 @router.post(
