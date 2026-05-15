@@ -1,7 +1,10 @@
+import logging
 import math
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
@@ -183,12 +186,64 @@ class AICoachEngine:
         )
         overall_score = max(0, min(100, overall_score))
 
+        # ── Overall score caps for serious issues ─────────────────────
+        vcp_cap = features["volume_change_percent"]
+        ppkg_cap = features["protein_per_kg"]
+        cv_cap = features["calorie_cv"]
+
+        if vcp_cap is not None and vcp_cap > 100:
+            overall_score = min(overall_score, 75)
+        if ppkg_cap is not None and ppkg_cap < 1.0:
+            overall_score = min(overall_score, 70)
+        if cv_cap is not None and cv_cap > 0.35:
+            overall_score = min(overall_score, 75)
+        # Combined cap: volume spike + low protein
+        if (
+            vcp_cap is not None and vcp_cap > 50
+            and ppkg_cap is not None and ppkg_cap < 1.2
+        ):
+            overall_score = min(overall_score, 65)
+        # Combined-risk penalties on overall
+        if (
+            vcp_cap is not None and vcp_cap > 50
+            and ppkg_cap is not None and ppkg_cap < 1.2
+        ):
+            overall_score = max(0, overall_score - 5)
+        if (
+            ppkg_cap is not None and ppkg_cap < 1.2
+            and cv_cap is not None and cv_cap > 0.25
+        ):
+            overall_score = max(0, overall_score - 5)
+
+        overall_score = max(0, min(100, overall_score))
+
         readiness_label = self._readiness_label(overall_score)
+
+        # ── Debug logging ─────────────────────────────────────────────
+        logger.info(
+            "AI Coach scoring | "
+            "weekly_volume_kg=%.1f | previous_weekly_volume_kg=%.1f | "
+            "volume_change_percent=%s | protein_per_kg=%s | calorie_cv=%s | "
+            "training=%d | nutrition=%d | recovery=%d | overall=%d | "
+            "vol_spike_ded=%.1f | protein_ded=%.1f | cv_ded=%.1f",
+            features["weekly_volume_kg"],
+            features["previous_weekly_volume_kg"],
+            features["volume_change_percent"],
+            features["protein_per_kg"],
+            features["calorie_cv"],
+            training_score,
+            nutrition_score,
+            recovery_score,
+            overall_score,
+            breakdown.volume_spike_deduction,
+            breakdown.low_protein_deduction,
+            breakdown.calorie_cv_deduction,
+        )
 
         # 8. Recommendations + warnings
         recommendations, warnings = self._generate_recommendations_and_warnings(features)
         recommendations.sort(key=lambda r: r.impact, reverse=True)
-        recommendations = recommendations[:3]
+        recommendations = recommendations[:5]
 
         # 9. Confidence
         confidence, confidence_reason = self._estimate_confidence(features)
@@ -225,6 +280,17 @@ class AICoachEngine:
             volume_change_percent=(
                 round(features["volume_change_percent"], 1)
                 if features["volume_change_percent"] is not None
+                else None
+            ),
+            active_program_name=(
+                active_program.name if active_program else None
+            ),
+            active_program_days_per_week=(
+                active_program.days_per_week if active_program else None
+            ),
+            adherence_percent=(
+                round(features["adherence_percent"], 1)
+                if features["adherence_percent"] is not None
                 else None
             ),
             average_daily_calories=round(features["average_daily_calories"], 1),
@@ -320,6 +386,9 @@ class AICoachEngine:
                 / previous_weekly_volume_kg
                 * 100
             )
+        elif weekly_volume_kg > 0:
+            # Previous period had zero volume → treat as major spike
+            volume_change_percent = 999.0
         else:
             volume_change_percent = None
 
@@ -455,20 +524,23 @@ class AICoachEngine:
             training -= 8
             breakdown.muscle_imbalance_deduction = 8.0
 
-        # --- Recovery deductions ---
+        # --- Recovery deductions (v2 — stronger tiers) ---
         vcp = f["volume_change_percent"]
         if vcp is not None and vcp > 10:
-            if vcp > 35:
-                recovery -= 12
-                breakdown.volume_spike_deduction = 12.0
+            if vcp > 100:
+                recovery -= 30
+                breakdown.volume_spike_deduction = 30.0
+            elif vcp > 50:
+                recovery -= 22
+                breakdown.volume_spike_deduction = 22.0
             elif vcp > 25:
+                recovery -= 15
+                breakdown.volume_spike_deduction = 15.0
+            elif vcp > 10:
                 recovery -= 8
                 breakdown.volume_spike_deduction = 8.0
-            elif vcp > 10:
-                recovery -= 5
-                breakdown.volume_spike_deduction = 5.0
 
-        # --- Nutrition deductions ---
+        # --- Nutrition deductions (v2 — stronger tiers) ---
         lcp = f["logging_consistency_percent"]
         if lcp < 50:
             nutrition -= 10
@@ -479,19 +551,41 @@ class AICoachEngine:
 
         ppkg = f["protein_per_kg"]
         if ppkg is not None:
-            if ppkg < 1.2:
-                nutrition -= 12
-                breakdown.low_protein_deduction = 12.0
+            if ppkg < 1.0:
+                nutrition -= 25
+                breakdown.low_protein_deduction = 25.0
+            elif ppkg < 1.2:
+                nutrition -= 18
+                breakdown.low_protein_deduction = 18.0
             elif ppkg < 1.6:
-                nutrition -= 6
-                breakdown.low_protein_deduction = 6.0
+                nutrition -= 10
+                breakdown.low_protein_deduction = 10.0
         else:
             breakdown.missing_weight_note = True
 
         cv = f["calorie_cv"]
-        if cv is not None and cv > 0.25:
+        if cv is not None:
+            if cv > 0.35:
+                nutrition -= 18
+                breakdown.calorie_cv_deduction = 18.0
+            elif cv > 0.25:
+                nutrition -= 12
+                breakdown.calorie_cv_deduction = 12.0
+
+        # --- Combined-risk penalties ---
+        # Recovery + nutrition risk: high volume spike with low protein
+        if (
+            vcp is not None and vcp > 50
+            and ppkg is not None and ppkg < 1.2
+        ):
+            recovery -= 10
+
+        # Bad nutrition quality: low protein + unstable calories
+        if (
+            ppkg is not None and ppkg < 1.2
+            and cv is not None and cv > 0.25
+        ):
             nutrition -= 8
-            breakdown.calorie_cv_deduction = 8.0
 
         return training, nutrition, recovery, breakdown
 
@@ -544,15 +638,38 @@ class AICoachEngine:
 
         # -- Volume spike --
         vcp = f["volume_change_percent"]
-        if vcp is not None and vcp > 25:
-            warn_priority = "high" if vcp > 35 else "medium"
+        if vcp is not None and vcp > 10:
+            if vcp > 50:
+                warn_priority = "high"
+                warn_title = "Training volume increased sharply"
+                warn_detail = (
+                    f"Your total workout volume increased by {round(vcp, 1)}% "
+                    f"compared with the previous period. Avoid adding more sets "
+                    f"until recovery is stable."
+                )
+            elif vcp > 25:
+                warn_priority = "high"
+                warn_title = "Training volume increased quickly"
+                warn_detail = (
+                    f"Your training volume increased by {round(vcp, 1)}% "
+                    f"compared with the previous period."
+                )
+            else:
+                warn_priority = "medium"
+                warn_title = "Training volume increased"
+                warn_detail = (
+                    f"Your training volume increased by {round(vcp, 1)}% "
+                    f"compared with the previous period."
+                )
+
             warns.append(AICoachWarning(
                 code="volume_spike",
-                title="Training volume increased quickly",
-                detail=f"Your training volume increased by {round(vcp, 1)}% compared with the previous period.",
+                title=warn_title,
+                detail=warn_detail,
                 priority=warn_priority,
             ))
-            rec_impact = 10 if vcp > 35 else 8
+
+            rec_impact = 10 if vcp > 50 else (8 if vcp > 25 else 6)
             recs.append(AICoachRecommendation(
                 title="Avoid increasing volume further",
                 reason=f"Your total training volume increased by {round(vcp, 1)}%.",
@@ -584,7 +701,20 @@ class AICoachEngine:
         # -- Low protein --
         ppkg = f["protein_per_kg"]
         if ppkg is not None and ppkg < 1.6:
-            if ppkg < 1.2:
+            if ppkg < 1.0:
+                recs.append(AICoachRecommendation(
+                    title="Increase protein intake urgently",
+                    reason=(
+                        f"Your average protein intake is {round(ppkg, 2)} g/kg, "
+                        f"well below the minimum for strength training."
+                    ),
+                    action="Add two high-protein meals or snacks today.",
+                    priority="high",
+                    category="nutrition",
+                    impact=10,
+                    metric="protein_per_kg",
+                ))
+            elif ppkg < 1.2:
                 recs.append(AICoachRecommendation(
                     title="Increase protein intake",
                     reason=(
@@ -594,7 +724,7 @@ class AICoachEngine:
                     action="Add one high-protein meal or snack today.",
                     priority="high",
                     category="nutrition",
-                    impact=10,
+                    impact=9,
                     metric="protein_per_kg",
                 ))
             else:
@@ -641,13 +771,15 @@ class AICoachEngine:
         # -- Calorie variability --
         cv = f["calorie_cv"]
         if cv is not None and cv > 0.25:
+            cv_impact = 8 if cv > 0.35 else 6
+            cv_priority = "high" if cv > 0.35 else "medium"
             recs.append(AICoachRecommendation(
                 title="Stabilize daily calories",
                 reason="Your daily calories varied significantly across logged days.",
                 action="Keep your next few days within a similar calorie range.",
-                priority="medium",
+                priority=cv_priority,
                 category="nutrition",
-                impact=6,
+                impact=cv_impact,
                 metric="calorie_variability",
             ))
 
