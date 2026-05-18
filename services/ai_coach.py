@@ -524,6 +524,22 @@ class AICoachEngine:
             training -= 8
             breakdown.muscle_imbalance_deduction = 8.0
 
+        # --- Training deduction for volume spike (load management) ---
+        vcp_train = f["volume_change_percent"]
+        if vcp_train is not None and vcp_train > 10:
+            if vcp_train > 100:
+                training -= 15
+                breakdown.volume_spike_training_deduction = 15.0
+            elif vcp_train > 50:
+                training -= 10
+                breakdown.volume_spike_training_deduction = 10.0
+            elif vcp_train > 25:
+                training -= 7
+                breakdown.volume_spike_training_deduction = 7.0
+            elif vcp_train > 10:
+                training -= 3
+                breakdown.volume_spike_training_deduction = 3.0
+
         # --- Recovery deductions (v2 — stronger tiers) ---
         vcp = f["volume_change_percent"]
         if vcp is not None and vcp > 10:

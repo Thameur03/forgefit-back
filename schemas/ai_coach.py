@@ -30,6 +30,7 @@ class AICoachScoreBreakdown(BaseModel):
     no_workouts_deduction: float = 0.0
     adherence_deduction: float = 0.0
     volume_spike_deduction: float = 0.0
+    volume_spike_training_deduction: float = 0.0
     muscle_imbalance_deduction: float = 0.0
 
     low_protein_deduction: float = 0.0
@@ -66,6 +67,10 @@ class AICoachSummaryResponse(BaseModel):
     weekly_volume_kg: float = 0.0
     previous_weekly_volume_kg: float = 0.0
     volume_change_percent: Optional[float] = None
+
+    active_program_name: Optional[str] = None
+    active_program_days_per_week: Optional[int] = None
+    adherence_percent: Optional[float] = None
 
     average_daily_calories: float = 0.0
     average_daily_protein_g: float = 0.0
