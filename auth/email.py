@@ -1,60 +1,122 @@
 import smtplib
 import logging
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# ── Resend (primary) ──────────────────────────────────────────────────────────
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+
+# ── SMTP (fallback) ───────────────────────────────────────────────────────────
 MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
-MAIL_FROM = os.getenv("MAIL_FROM", "noreply@forgefit.com")
+MAIL_FROM = os.getenv("MAIL_FROM", "onboarding@resend.dev")
 MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "AthleteLab")
 MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
 MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 
-def _can_send_email() -> bool:
-    """Check if SMTP credentials are configured."""
-    return bool(MAIL_USERNAME and MAIL_PASSWORD and MAIL_PASSWORD != "your_app_password")
+# ═══════════════════════════════════════════════════════════
+# RESEND SDK (primary)
+# ═══════════════════════════════════════════════════════════
+
+def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
+    """Send via Resend SDK. Returns True on success."""
+    if not RESEND_API_KEY:
+        return False
+    try:
+        import resend  # noqa: PLC0415
+        resend.api_key = RESEND_API_KEY
+        params: resend.Emails.SendParams = {
+            "from": f"{MAIL_FROM_NAME} <{MAIL_FROM}>",
+            "to": [to_email],
+            "subject": subject,
+            "text": body,
+        }
+        response = resend.Emails.send(params)
+        logger.info("[Resend] Sent '%s' to %s — id=%s", subject, to_email, response.get("id"))
+        return True
+    except Exception as e:
+        logger.error("[Resend] Failed to send to %s: %s: %s", to_email, type(e).__name__, e)
+        return False
 
 
-def _send_email(to_email: str, subject: str, body: str) -> None:
-    """Send an email using SMTP. Falls back to logging in DEBUG mode."""
-    if not _can_send_email():
-        if DEBUG:
-            logger.warning(
-                "SMTP not configured — email NOT sent. Subject: '%s', To: %s, Body: %s",
-                subject, to_email, body,
-            )
-        else:
-            logger.warning("SMTP not configured — email NOT sent to %s", to_email)
-        return
+# ═══════════════════════════════════════════════════════════
+# SMTP (fallback)
+# ═══════════════════════════════════════════════════════════
 
+def _can_send_smtp() -> bool:
+    return bool(
+        MAIL_USERNAME
+        and MAIL_PASSWORD
+        and MAIL_PASSWORD != "your_app_password"
+    )
+
+
+def _send_via_smtp(to_email: str, subject: str, body: str) -> bool:
+    """Send via SMTP STARTTLS. Returns True on success."""
+    if not _can_send_smtp():
+        return False
     try:
         msg = MIMEMultipart()
         msg["From"] = f"{MAIL_FROM_NAME} <{MAIL_FROM}>"
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
-
-        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT) as server:
+        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=20) as server:
             server.starttls()
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
             server.sendmail(MAIL_FROM, to_email, msg.as_string())
-        logger.info("Sent '%s' to %s", subject, to_email)
+        logger.info("[SMTP] Sent '%s' to %s", subject, to_email)
+        return True
     except Exception as e:
-        logger.error("Failed to send email to %s: %s", to_email, e)
-        if DEBUG:
-            logger.debug("Email content for %s: %s", to_email, body)
+        logger.error("[SMTP] Failed to send to %s: %s", to_email, type(e).__name__)
+        return False
 
+
+# ═══════════════════════════════════════════════════════════
+# DISPATCHER
+# ═══════════════════════════════════════════════════════════
+
+def _send_email(to_email: str, subject: str, body: str) -> None:
+    """
+    Try Resend first, then fall back to SMTP.
+    Never raises — email failure must not crash the request.
+    """
+    if RESEND_API_KEY:
+        logger.info("[Email] Trying Resend for %s", to_email)
+        if _send_via_resend(to_email, subject, body):
+            return
+        logger.warning("[Email] Resend failed, trying SMTP for %s", to_email)
+
+    if _can_send_smtp():
+        logger.info("[Email] Trying SMTP for %s", to_email)
+        if _send_via_smtp(to_email, subject, body):
+            return
+        logger.error("[Email] SMTP also failed for %s", to_email)
+    elif not RESEND_API_KEY:
+        logger.warning(
+            "[Email] No provider configured (RESEND_API_KEY missing, MAIL_PASSWORD placeholder). "
+            "Email NOT sent to %s.",
+            to_email,
+        )
+        if DEBUG:
+            logger.debug("[Email] Subject=%r Body=%s", subject, body)
+
+
+# ═══════════════════════════════════════════════════════════
+# PUBLIC API
+# ═══════════════════════════════════════════════════════════
 
 def send_verification_email(email: str, code: str) -> None:
     """Send email verification OTP."""
+    logger.info("[Email] Queueing verification email for %s", email)
     subject = "Verify your AthleteLab account"
     body = (
         f"Hello,\n\n"
@@ -71,6 +133,7 @@ def send_verification_email(email: str, code: str) -> None:
 
 def send_password_reset_email(email: str, code: str) -> None:
     """Send password reset OTP."""
+    logger.info("[Email] Queueing password reset email for %s", email)
     subject = "Reset your AthleteLab password"
     body = (
         f"Hello,\n\n"
