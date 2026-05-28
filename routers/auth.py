@@ -32,8 +32,23 @@ router = APIRouter()
 
 OTP_EXPIRY_MINUTES = 15
 
-# ── Beta feature flag ──────────────────────────────────────────────────────────
-REQUIRE_EMAIL_VERIFICATION = os.getenv("REQUIRE_EMAIL_VERIFICATION", "true").lower() == "true"
+
+# ── Beta feature flag ───────────────────────────────────────────────────────────────
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    """
+    Robustly parse a boolean env variable.
+    Treats '1', 'true', 'yes', 'on' (case-insensitive, stripped) as True.
+    Returns `default` when the variable is not set.
+    """
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+REQUIRE_EMAIL_VERIFICATION: bool = _env_bool("REQUIRE_EMAIL_VERIFICATION", default=True)
+logger.info("[Auth] REQUIRE_EMAIL_VERIFICATION=%s", REQUIRE_EMAIL_VERIFICATION)
 
 
 def _generate_otp(length: int = 6) -> str:
@@ -195,6 +210,12 @@ def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)
             detail="Invalid email or password",
         )
 
+    logger.info(
+        "[Auth] Login verification_check enabled=%s user_verified=%s email=%s",
+        REQUIRE_EMAIL_VERIFICATION,
+        user.is_verified,
+        user.email,
+    )
     # Block login for unverified users (skipped when email verification is disabled)
     if REQUIRE_EMAIL_VERIFICATION and not user.is_verified:
         raise HTTPException(
