@@ -1,5 +1,6 @@
 from datetime import date
 from collections import defaultdict
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from schemas.nutrition import (
 )
 from auth.utils import get_current_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -55,6 +57,13 @@ def create_nutrition_log(
     Accepts meal name, food name, calories, and optional macros.
     Defaults to today's date if not specified.
     """
+    logger.info(
+        "[Nutrition] POST /nutrition user_id=%s meal=%s food=%s calories=%s",
+        current_user.id,
+        data.meal_name,
+        data.food_name,
+        data.calories,
+    )
     log_date = data.date if data.date is not None else date.today()
     log = NutritionLog(
         user_id=current_user.id,
@@ -69,6 +78,7 @@ def create_nutrition_log(
     db.add(log)
     db.commit()
     db.refresh(log)
+    logger.info("[Nutrition] saved log id=%s for user_id=%s", log.id, current_user.id)
     return log
 
 
@@ -88,6 +98,13 @@ def get_today_summary(
         .filter(NutritionLog.user_id == current_user.id, NutritionLog.date == today)
         .order_by(NutritionLog.id)
         .all()
+    )
+    total_calories = sum(log.calories for log in logs)
+    logger.info(
+        "[Nutrition] GET /nutrition/today user_id=%s logs=%s calories=%s",
+        current_user.id,
+        len(logs),
+        total_calories,
     )
     return _build_daily_summary(today, logs)
 

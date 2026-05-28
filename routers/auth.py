@@ -1,5 +1,7 @@
+import os
 import random
 import string
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -25,9 +27,13 @@ from auth.utils import (
 )
 from auth.email import send_verification_email, send_password_reset_email
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 OTP_EXPIRY_MINUTES = 15
+
+# ── Beta feature flag ──────────────────────────────────────────────────────────
+REQUIRE_EMAIL_VERIFICATION = os.getenv("REQUIRE_EMAIL_VERIFICATION", "true").lower() == "true"
 
 
 def _generate_otp(length: int = 6) -> str:
@@ -45,8 +51,11 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
     """
     Register a new user.
 
-    Creates the account with is_verified=False, generates a verification
-    OTP, hashes it, stores it with expiration, and sends it via email.
+    When REQUIRE_EMAIL_VERIFICATION=false (beta mode): creates the account
+    with is_verified=True immediately — no OTP or email is generated.
+
+    When REQUIRE_EMAIL_VERIFICATION=true: creates with is_verified=False,
+    generates a verification OTP, and sends it via email.
     """
     existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
@@ -55,9 +64,29 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
             detail="Email already registered",
         )
 
-    # Generate and hash verification OTP
-    otp = _generate_otp()
+    if not REQUIRE_EMAIL_VERIFICATION:
+        # ── Beta mode: skip verification entirely ──────────────────────────
+        logger.info("[Auth] Email verification disabled for beta. Creating verified user.")
+        new_user = User(
+            email=user_data.email,
+            hashed_password=hash_password(user_data.password),
+            full_name=user_data.full_name,
+            is_verified=True,
+            verification_code=None,
+            verification_code_expires=None,
+            date_of_birth=user_data.date_of_birth,
+            gender=user_data.gender,
+            weight_kg=user_data.weight_kg,
+            height_cm=user_data.height_cm,
+            fitness_level=user_data.fitness_level,
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return new_user
 
+    # ── Normal mode: generate OTP, send verification email ─────────────────
+    otp = _generate_otp()
     new_user = User(
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
@@ -166,8 +195,8 @@ def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)
             detail="Invalid email or password",
         )
 
-    # Block login for unverified users
-    if not user.is_verified:
+    # Block login for unverified users (skipped when email verification is disabled)
+    if REQUIRE_EMAIL_VERIFICATION and not user.is_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Please verify your email before logging in.",

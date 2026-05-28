@@ -24,8 +24,11 @@ import models.food
 import models.food_filter
 import models.schedule
 import os
+import logging
 
 from limiter import limiter
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ForgeFit API",
@@ -114,6 +117,10 @@ def _seed_food_filters():
 
 
 _seed_food_filters()
+
+# ── Startup config log ────────────────────────────────────────────────────────
+_require_email_verification = os.getenv("REQUIRE_EMAIL_VERIFICATION", "true")
+logger.info("[Auth] REQUIRE_EMAIL_VERIFICATION=%s", _require_email_verification)
 
 
 # Include routers
