@@ -12,6 +12,8 @@ from routers.stats import router as stats_router
 from routers.programs import router as programs_router
 from routers.admin import router as admin_router
 from routers.admin_food_filters import router as admin_food_filters_router
+from routers.admin_analytics import router as admin_analytics_router
+from routers.analytics import router as analytics_router
 from routers.schedule import router as schedule_router
 from routers.ai import router as ai_router
 import models.user
@@ -23,6 +25,7 @@ import models.admin
 import models.food
 import models.food_filter
 import models.schedule
+import models.analytics_event
 import os
 import logging
 
@@ -133,6 +136,8 @@ app.include_router(stats_router, prefix="/stats", tags=["Statistics"])
 app.include_router(programs_router, prefix="/programs", tags=["Programs"])
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(admin_food_filters_router, prefix="/admin", tags=["Admin Food Filters"])
+app.include_router(admin_analytics_router, prefix="/admin", tags=["Admin Analytics"])
+app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
 app.include_router(schedule_router, prefix="/schedule", tags=["Schedule"])
 app.include_router(ai_router, prefix="/ai", tags=["AI Coach"])
 

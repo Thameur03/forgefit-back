@@ -20,6 +20,7 @@ from models.program import Program, ProgramDay, ProgramExercise
 from models.nutrition import NutritionLog
 from models.token import RevokedToken
 from models.schedule import ScheduledWorkout
+from models.analytics_event import AnalyticsEvent  # noqa: F401 — keep for autogenerate
 
 target_metadata = database.Base.metadata
 
