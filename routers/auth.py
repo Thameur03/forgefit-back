@@ -287,9 +287,12 @@ def forgot_password(request: Request, data: ForgotPasswordRequest, db: Session =
         user.reset_password_code = hash_password(otp)
         user.reset_password_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
         db.commit()
-        send_password_reset_email(user.email, otp)
+        delivered = send_password_reset_email(user.email, otp)
+        if not delivered:
+            logger.warning("[Auth] Reset email delivery failed for user (details in email.py logs)")
 
     return {"message": "If this email exists, a reset code has been sent"}
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -309,9 +312,19 @@ def reset_password(request: Request, data: ResetPasswordRequest, db: Session = D
     if (
         user.reset_password_code is None
         or user.reset_password_code_expires is None
-        or datetime.now(timezone.utc) > user.reset_password_code_expires
         or not verify_password(data.code, user.reset_password_code)
     ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset code",
+        )
+    # Normalize expiry to UTC regardless of whether the DB driver returns
+    # a timezone-aware or timezone-naive datetime (SQLite returns naive).
+    expires = user.reset_password_code_expires
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires:
+
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset code",
