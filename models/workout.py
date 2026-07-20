@@ -11,6 +11,11 @@ class Workout(Base):
     notes = Column(String, nullable=True)
     name = Column(String(255), nullable=True)
     duration_seconds = Column(Integer, default=0)
+    # Idempotency key sent by the Flutter client.
+    # Nullable so legacy rows (client_request_id IS NULL) are unaffected.
+    # Uniqueness enforced by a partial PostgreSQL index (user_id, client_request_id)
+    # WHERE client_request_id IS NOT NULL — see Alembic migration 003.
+    client_request_id = Column(String(36), nullable=True, index=False)
 
     sets = relationship("WorkoutSet", back_populates="workout", cascade="all, delete-orphan")
 

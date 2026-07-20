@@ -53,6 +53,10 @@ class WorkoutCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
     name: Optional[str] = None
     duration_seconds: Optional[int] = 0
+    # Stable UUID generated once per logical workout by the client.
+    # The same key may be safely retried after a timeout or network failure.
+    # Old clients that omit this field create rows with NULL (no deduplication).
+    client_request_id: Optional[str] = Field(default=None, max_length=36)
 
 class WorkoutUpdate(BaseModel):
     name: Optional[str] = None
@@ -73,6 +77,7 @@ class WorkoutResponse(BaseModel):
     sets: List[WorkoutSetResponse] = []
     total_sets: int = 0
     total_volume_kg: float = 0.0
+    client_request_id: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -89,6 +94,7 @@ class WorkoutSummary(BaseModel):
     calories_burned: Optional[int] = 0
     total_sets: int = 0
     total_volume_kg: float = 0.0
+    client_request_id: Optional[str] = None
 
     class Config:
         from_attributes = True

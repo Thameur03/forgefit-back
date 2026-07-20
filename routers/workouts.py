@@ -2,8 +2,10 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
 from database import get_db
 from models.user import User
@@ -142,28 +144,123 @@ def _build_workout_response(db: Session, workout: Workout, user: User) -> dict:
         "sets": sets_response,
         "total_sets": total_sets,
         "total_volume_kg": total_volume_kg,
+        "client_request_id": workout.client_request_id,
     }
 
 
-@router.post("/", response_model=WorkoutResponse, status_code=status.HTTP_201_CREATED)
+def _workout_json_response(payload: dict, http_status: int):
+    """Serialize a _build_workout_response payload to a JSONResponse.
+
+    Uses WorkoutResponse.model_validate (Pydantic v2) / parse_obj (Pydantic v1)
+    so that Date fields are serialised correctly and all fields are included.
+    """
+    from fastapi.responses import JSONResponse
+
+    try:
+        # Pydantic v2
+        resp_model = WorkoutResponse.model_validate(payload)
+        content = resp_model.model_dump(mode="json")
+    except AttributeError:
+        # Pydantic v1 fallback
+        resp_model = WorkoutResponse.parse_obj(payload)
+        import json
+        content = json.loads(resp_model.json())
+    return JSONResponse(status_code=http_status, content=content)
+
+
+@router.post(
+    "/",
+    response_model=WorkoutResponse,
+    # Default status_code is 201; replays return 200 via JSONResponse.
+    status_code=status.HTTP_201_CREATED,
+)
 def create_workout(
     data: WorkoutCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create a new workout session. Defaults to today's date if not specified."""
+    """Create a new workout session (idempotent when client_request_id is provided).
+
+    Idempotency contract:
+    - If *client_request_id* is omitted (None / legacy clients): inserts a new row
+      unconditionally.  Two requests with NULL keys create two separate rows.
+    - If *client_request_id* is provided:
+        1. Pre-check: if a row with (user_id, key) already exists, return it as HTTP 200.
+        2. Otherwise insert a new row.
+        3. If a concurrent request races past the pre-check and the partial unique
+           index fires an IntegrityError, the transaction is rolled back and the
+           existing row is fetched and returned as HTTP 200.
+        4. If the IntegrityError is unrelated to this idempotency key (a different
+           constraint), the error is re-raised as HTTP 409.
+
+    Payload mismatch policy:
+        The creation payload is a shell (date / name / notes / duration_seconds).
+        All exercise data is appended separately via POST /workouts/{id}/sets.
+        A retry with different metadata (e.g. a different `name`) silently returns
+        the first-created row; no 409 mismatch check is performed for beta.
+
+    Response codes:
+        201  First creation.
+        200  Replay — same (user_id, client_request_id) already in the database.
+    """
     workout_date = data.date if data.date is not None else date.today()
+
+    # ── Pre-check: return existing row for known key ──────────────────────────
+    if data.client_request_id is not None:
+        existing = (
+            db.query(Workout)
+            .filter(
+                Workout.user_id == current_user.id,
+                Workout.client_request_id == data.client_request_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            return _workout_json_response(
+                _build_workout_response(db, existing, current_user),
+                status.HTTP_200_OK,
+            )
+
+    # ── Insert new workout ────────────────────────────────────────────────────
     workout = Workout(
         user_id=current_user.id,
         date=workout_date,
         notes=data.notes,
         name=data.name,
         duration_seconds=data.duration_seconds,
+        client_request_id=data.client_request_id,
     )
-    db.add(workout)
-    db.commit()
-    db.refresh(workout)
-    return _build_workout_response(db, workout, current_user)
+    try:
+        db.add(workout)
+        db.commit()
+        db.refresh(workout)
+        return _build_workout_response(db, workout, current_user)
+
+    except IntegrityError as exc:
+        db.rollback()
+
+        # Race handler: a concurrent request beat us to the insert.
+        # Re-query always scoped to current_user — never exposes another user's row.
+        if data.client_request_id is not None:
+            recovered = (
+                db.query(Workout)
+                .filter(
+                    Workout.user_id == current_user.id,
+                    Workout.client_request_id == data.client_request_id,
+                )
+                .first()
+            )
+            if recovered is not None:
+                return _workout_json_response(
+                    _build_workout_response(db, recovered, current_user),
+                    status.HTTP_200_OK,
+                )
+
+        # IntegrityError was for a different constraint or recovery failed.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workout creation conflict. Please try again.",
+        ) from exc
 
 
 @router.post(

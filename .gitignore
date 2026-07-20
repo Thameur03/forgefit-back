@@ -7,3 +7,6 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Local test databases
+*.db
