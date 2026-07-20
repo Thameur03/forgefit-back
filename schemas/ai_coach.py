@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Literal, Optional
 from pydantic import BaseModel
 
@@ -7,6 +7,14 @@ Priority = Literal["high", "medium", "low"]
 Category = Literal["workout", "nutrition", "recovery"]
 Confidence = Literal["high", "medium", "low"]
 ReadinessLabel = Literal["Excellent", "Good", "Moderate", "Needs Attention"]
+
+
+class UnlockStatusResponse(BaseModel):
+    unlocked: bool
+    days_remaining: int
+    unlock_date: date
+    created_at: date
+
 
 
 class AICoachRecommendation(BaseModel):
