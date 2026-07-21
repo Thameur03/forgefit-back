@@ -17,6 +17,7 @@ from schemas.ai_coach import (
     AICoachWarning,
     AICoachScoreBreakdown,
     AICoachSummaryResponse,
+    DataState,
 )
 
 
@@ -251,11 +252,17 @@ class AICoachEngine:
         # 10. Missing data
         missing_data = features["missing_data"]
 
-        # Summary text
-        summary = self._generate_summary_text(readiness_label, missing_data)
+        # 11. Data state — determines summary tone and UI presentation
+        data_state = self._derive_data_state(features)
+        has_sufficient_data = data_state == "sufficient"
 
-        # Next best action
-        next_best_action = self._generate_next_best_action(recommendations)
+        # Summary text (data-state aware)
+        summary = self._generate_summary_text(data_state, features, readiness_label)
+
+        # Next best action (data-state aware)
+        next_best_action = self._generate_next_best_action(
+            recommendations, data_state, features
+        )
 
         return AICoachSummaryResponse(
             generated_at=datetime.now(timezone.utc),
@@ -268,6 +275,8 @@ class AICoachEngine:
             confidence=confidence,
             confidence_reason=confidence_reason,
             missing_data=missing_data,
+            data_state=data_state,
+            has_sufficient_data=has_sufficient_data,
             summary=summary,
             recommendations=recommendations,
             warnings=warnings,
@@ -860,43 +869,145 @@ class AICoachEngine:
             "There is limited workout or nutrition data for this period.",
         )
 
+    # ── Data-state derive ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _derive_data_state(f: dict) -> DataState:
+        """Return a 5-level token describing how much data was available."""
+        w = f["workouts_this_period"]
+        ld = f["logged_days"]
+        if w == 0 and ld == 0:
+            return "no_data"
+        if w > 0 and ld == 0:
+            return "workout_only"
+        if w == 0 and ld > 0:
+            return "nutrition_only"
+        # Both present but sparse
+        if w < 2 or ld < 3:
+            return "limited"
+        return "sufficient"
+
     # ── Summary text ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _generate_summary_text(label: str, missing_data: list) -> str:
-        texts = {
+    def _generate_summary_text(
+        data_state: DataState, f: dict, readiness_label: str
+    ) -> str:
+        """Return a summary grounded in the actual data state.
+
+        State A (no_data): no workouts, no nutrition.
+        State B (workout_only): workouts but no nutrition.
+        State C (nutrition_only): nutrition but no workouts.
+        State D (limited): both present but sparse.
+        State E (sufficient): enough data for a grounded summary.
+        """
+        w = f["workouts_this_period"]
+        ld = f["logged_days"]
+
+        if data_state == "no_data":
+            return (
+                "No workouts or nutrition entries were logged during this "
+                "analysis period. Log your next workout and meals to start "
+                "building a reliable weekly assessment."
+            )
+
+        if data_state == "workout_only":
+            return (
+                f"Training activity was recorded ({w} workout"
+                f"{'s' if w != 1 else ''}), but there is not enough nutrition "
+                "data to evaluate your overall week reliably. Your current "
+                "assessment is based mainly on workout activity."
+            )
+
+        if data_state == "nutrition_only":
+            return (
+                f"Nutrition information was logged on {ld} day"
+                f"{'s' if ld != 1 else ''}, but no completed workouts were "
+                "found during this period. Training and overall-readiness "
+                "conclusions are not yet reliable."
+            )
+
+        if data_state == "limited":
+            return (
+                "This is an early signal based on limited workout and "
+                "nutrition data. Continue logging consistently before "
+                "treating the weekly scores as a stable trend."
+            )
+
+        # Sufficient data — grounded summary using actual metrics
+        labels = {
             "Excellent": (
-                "Your week looks well balanced. Training, nutrition, "
-                "and recovery signals are mostly on track."
+                "Your training consistency and nutrition coverage were both "
+                "strong this week. Based on your recorded sessions, "
+                "recovery load appears well managed."
             ),
             "Good": (
-                "Your week is mostly on track, with a few small improvements "
-                "that could improve consistency and recovery."
+                "Your week is performing well overall, with a few areas for "
+                "improvement. Based on the available data, "
+                "training consistency was the strongest signal."
             ),
             "Moderate": (
-                "Some key signals need attention this week. Focus on the "
-                "highest-priority action first instead of changing everything at once."
+                "Some key signals need attention this week. Based on your "
+                "recorded sessions, focus on the highest-priority action "
+                "first rather than changing everything at once."
             ),
             "Needs Attention": (
-                "Your recent data shows several issues that may limit progress. "
-                "Start with the next best action and rebuild consistency gradually."
+                "Your recent data shows several issues that may limit "
+                "progress. Based on the available data, training volume "
+                "or nutrition coverage needs work. Start with the next "
+                "best action and rebuild consistency gradually."
             ),
         }
-        text = texts.get(label, texts["Moderate"])
-        if missing_data:
-            text += " Because some data is missing, this insight is less certain."
-        return text
+        return labels.get(readiness_label, labels["Moderate"])
 
     # ── Next best action ──────────────────────────────────────────────────
 
     @staticmethod
     def _generate_next_best_action(
         recommendations: List[AICoachRecommendation],
+        data_state: DataState,
+        f: dict,
     ) -> Optional[str]:
+        """Return the single most important action for the user right now.
+
+        When data is absent the action must prompt logging, not training advice.
+        """
+        w = f["workouts_this_period"]
+        ld = f["logged_days"]
+
+        if data_state == "no_data":
+            return (
+                "Log your first workout to start building your weekly assessment."
+            )
+
+        if data_state == "workout_only":
+            return (
+                "Log today's meals — nutrition coverage is currently limiting "
+                "the reliability of your weekly insight."
+            )
+
+        if data_state == "nutrition_only":
+            return (
+                "Log your next completed workout — training data is missing "
+                "and required for a reliable weekly assessment."
+            )
+
+        if data_state == "limited":
+            if w < 2:
+                return (
+                    "Complete at least one more workout this week to improve "
+                    "the reliability of your training score."
+                )
+            if ld < 3:
+                return (
+                    "Log meals for a few more days — nutrition coverage is "
+                    "too sparse for a reliable assessment."
+                )
+
         if not recommendations:
             return None
 
-        # Separate by category bucket
+        # Sufficient data — pick the highest-impact action
         workout_recovery = [
             r for r in recommendations if r.category in ("workout", "recovery")
         ]
@@ -906,7 +1017,6 @@ class AICoachEngine:
         top_nut = nutrition[0] if nutrition else None
 
         if top_wr and top_nut:
-            # Combine into one sentence
             wr_action = top_wr.action.rstrip(".")
             nut_action = top_nut.action[0].lower() + top_nut.action[1:]
             nut_action = nut_action.rstrip(".")

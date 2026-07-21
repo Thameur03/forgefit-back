@@ -7,6 +7,8 @@ Priority = Literal["high", "medium", "low"]
 Category = Literal["workout", "nutrition", "recovery"]
 Confidence = Literal["high", "medium", "low"]
 ReadinessLabel = Literal["Excellent", "Good", "Moderate", "Needs Attention"]
+# Describes how much data was available for this analysis period
+DataState = Literal["no_data", "workout_only", "nutrition_only", "limited", "sufficient"]
 
 
 class UnlockStatusResponse(BaseModel):
@@ -62,6 +64,10 @@ class AICoachSummaryResponse(BaseModel):
     confidence: Confidence
     confidence_reason: str
     missing_data: List[str] = []
+
+    # Data availability state — used by frontend for honest presentation
+    data_state: DataState = "sufficient"
+    has_sufficient_data: bool = True
 
     summary: str
     recommendations: List[AICoachRecommendation] = []
