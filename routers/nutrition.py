@@ -56,14 +56,48 @@ def create_nutrition_log(
 
     Accepts meal name, food name, calories, and optional macros.
     Defaults to today's date if not specified.
+
+    When client_request_id is provided the endpoint is idempotent:
+    - A second request with the same (user_id, client_request_id) returns
+      HTTP 200 with the existing row — no duplicate is created.
+    - Requests without client_request_id use legacy behaviour (always insert).
+
+    NOTE: this endpoint saves exactly ONE nutrition-log row per call.
+    There is no atomic multi-food meal transaction endpoint.
     """
     logger.info(
-        "[Nutrition] POST /nutrition user_id=%s meal=%s food=%s calories=%s",
+        "[Nutrition] POST /nutrition user_id=%s meal=%s food=%s calories=%s crid=%s",
         current_user.id,
         data.meal_name,
         data.food_name,
         data.calories,
+        data.client_request_id,
     )
+
+    # ── Idempotency pre-check ─────────────────────────────────────────────────
+    if data.client_request_id:
+        existing = (
+            db.query(NutritionLog)
+            .filter(
+                NutritionLog.user_id == current_user.id,
+                NutritionLog.client_request_id == data.client_request_id,
+            )
+            .first()
+        )
+        if existing:
+            logger.info(
+                "[Nutrition] replay: returning existing log id=%s crid=%s",
+                existing.id,
+                data.client_request_id,
+            )
+            from fastapi.responses import JSONResponse
+            from fastapi.encoders import jsonable_encoder
+            response_data = NutritionLogResponse.model_validate(existing)
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=jsonable_encoder(response_data),
+            )
+
     log_date = data.date if data.date is not None else date.today()
     log = NutritionLog(
         user_id=current_user.id,
@@ -74,12 +108,43 @@ def create_nutrition_log(
         protein_g=data.protein_g,
         carbs_g=data.carbs_g,
         fat_g=data.fat_g,
+        client_request_id=data.client_request_id,
     )
     db.add(log)
-    db.commit()
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        # Race-condition recovery: another request with the same key committed
+        # first (IntegrityError from the partial unique index).
+        if data.client_request_id:
+            existing = (
+                db.query(NutritionLog)
+                .filter(
+                    NutritionLog.user_id == current_user.id,
+                    NutritionLog.client_request_id == data.client_request_id,
+                )
+                .first()
+            )
+            if existing:
+                logger.info(
+                    "[Nutrition] race recovery: returning existing log id=%s",
+                    existing.id,
+                )
+                from fastapi.responses import JSONResponse
+                from fastapi.encoders import jsonable_encoder
+                response_data = NutritionLogResponse.model_validate(existing)
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content=jsonable_encoder(response_data),
+                )
+        raise exc
+
     db.refresh(log)
     logger.info("[Nutrition] saved log id=%s for user_id=%s", log.id, current_user.id)
     return log
+
 
 
 @router.get("/today", response_model=DailySummary, status_code=status.HTTP_200_OK)

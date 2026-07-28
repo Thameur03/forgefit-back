@@ -26,6 +26,11 @@ class NutritionLogCreate(BaseModel):
     carbs_g: Optional[float] = Field(default=None, ge=0, le=2000)
     fat_g: Optional[float] = Field(default=None, ge=0, le=2000)
     fdc_id: Optional[int] = None
+    # Idempotency key from the Flutter client. When non-null the backend uses
+    # a partial unique index (user_id, client_request_id WHERE NOT NULL) to
+    # return the existing row instead of inserting a duplicate.
+    # Null = legacy / bulk behaviour: always insert.
+    client_request_id: Optional[str] = Field(default=None, max_length=36)
 
 
 class NutritionLogResponse(BaseModel):

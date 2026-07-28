@@ -14,3 +14,7 @@ class NutritionLog(Base):
     carbs_g = Column(Float, nullable=True)
     fat_g = Column(Float, nullable=True)
     fdc_id = Column(Integer, nullable=True)
+    # Idempotency key sent by the Flutter client.
+    # Nullable: legacy rows (client_request_id IS NULL) are unaffected.
+    # Uniqueness enforced by a partial PostgreSQL index — see migration 004.
+    client_request_id = Column(String(36), nullable=True, index=False)
