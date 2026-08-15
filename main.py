@@ -16,6 +16,8 @@ from routers.admin_analytics import router as admin_analytics_router
 from routers.analytics import router as analytics_router
 from routers.schedule import router as schedule_router
 from routers.ai import router as ai_router
+from routers.account import router as account_router
+
 import models.user
 import models.workout
 import models.nutrition
@@ -128,7 +130,9 @@ logger.info("[Auth] REQUIRE_EMAIL_VERIFICATION=%s", _require_email_verification)
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(account_router, prefix="/account", tags=["Account"])
 app.include_router(workouts_router, prefix="/workouts", tags=["Workouts"])
+
 app.include_router(exercises_router, prefix="/exercises", tags=["Exercises"])
 app.include_router(nutrition_router, prefix="/nutrition", tags=["Nutrition"])
 app.include_router(food_search_router, prefix="/food", tags=["Food Search"])
