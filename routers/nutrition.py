@@ -108,6 +108,7 @@ def create_nutrition_log(
         protein_g=data.protein_g,
         carbs_g=data.carbs_g,
         fat_g=data.fat_g,
+        fdc_id=data.fdc_id,
         client_request_id=data.client_request_id,
     )
     db.add(log)
@@ -267,6 +268,7 @@ def update_nutrition_log(
     log.protein_g = data.protein_g
     log.carbs_g = data.carbs_g
     log.fat_g = data.fat_g
+    log.fdc_id = data.fdc_id
     db.commit()
     db.refresh(log)
     return log

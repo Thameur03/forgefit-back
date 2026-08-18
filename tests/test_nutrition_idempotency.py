@@ -32,74 +32,12 @@ SQLite note:
 Bootstrap: same pattern as test_workout_idempotency.py.
 """
 
-import os
-import sys
 import uuid
-import threading
-import pytest
-from unittest.mock import patch
-
-# ── 1. Force test environment FIRST ───────────────────────────────────────────
-TEST_DB = "sqlite:///./test_nutrition_idempotency.db"
-os.environ["DATABASE_URL"] = TEST_DB
-os.environ["SECRET_KEY"] = "test-secret-only"
-os.environ["REQUIRE_EMAIL_VERIFICATION"] = "false"
-os.environ["RESEND_API_KEY"] = ""
-os.environ.setdefault("EXERCISEDB_API_KEY", "")
-os.environ.setdefault("USDA_API_KEY", "")
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-# ── 2. Override DB engine before any models import ─────────────────────────────
-from sqlalchemy import create_engine, inspect as sa_inspect, text
-from sqlalchemy.orm import sessionmaker
-import database
-
-test_engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-database.engine = test_engine
-database.SessionLocal = TestingSessionLocal  # type: ignore[assignment]
-
-# ── 3. Pre-import SQLite-safe models ──────────────────────────────────────────
-import models.user
-import models.workout
-import models.nutrition
-import models.token
-import models.program
-import models.schedule
-import models.food
-import models.food_filter
-import models.admin
-# analytics_event has JSONB — do NOT import here.
-
-# ── 4. Create tables before importing main ────────────────────────────────────
-for table in list(database.Base.metadata.tables.values()):
-    if table.name != "analytics_events":
-        table.create(bind=test_engine, checkfirst=True)
-
-# ── 5. Import app (food_filters table exists; engine already patched) ─────────
-with patch.object(database.Base.metadata, "create_all"):
-    from main import app
-
-from database import get_db
+from sqlalchemy import inspect as sa_inspect, text
 from auth.utils import hash_password
 from models.user import User
 from models.nutrition import NutritionLog
-from limiter import limiter
-
-# ── 6. Override get_db ────────────────────────────────────────────────────────
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[get_db] = override_get_db
-
-# ── 7. TestClient ─────────────────────────────────────────────────────────────
-from fastapi.testclient import TestClient
-client = TestClient(app, raise_server_exceptions=True)
+from tests.support import TestingSessionLocal, client, test_engine
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -153,28 +91,6 @@ def _base_payload(key: str | None = None, override: dict | None = None) -> dict:
     return p
 
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
-
-def _evaluate_limits_noop(request, endpoint, limits):
-    """No-op that also sets view_rate_limit to avoid slowapi crash in tests."""
-    request.state.view_rate_limit = None
-
-
-@pytest.fixture(autouse=True)
-def disable_rate_limit(monkeypatch):
-    monkeypatch.setattr(limiter, "_Limiter__evaluate_limits", _evaluate_limits_noop)
-
-
-@pytest.fixture(autouse=True)
-def clean_db():
-    yield
-    db = _db()
-    db.query(NutritionLog).delete()
-    db.query(User).delete()
-    db.commit()
-    db.close()
-
-
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 class TestNewKeyCreatesLog:
@@ -185,6 +101,23 @@ class TestNewKeyCreatesLog:
         assert r.status_code == 201, r.text
         assert "id" in r.json()
         assert _log_count("nutr-new@example.com", key) == 1
+
+    def test_fdc_id_is_persisted_and_returned(self):
+        headers = _make_user("nutr-fdc@example.com")
+        response = client.post(
+            "/nutrition/",
+            json=_base_payload(override={"fdc_id": 12345}),
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["fdc_id"] == 12345
+
+        db = _db()
+        row = db.query(NutritionLog).filter(
+            NutritionLog.id == response.json()["id"]
+        ).one()
+        assert row.fdc_id == 12345
+        db.close()
 
 
 class TestSameKeyReturnsExisting:

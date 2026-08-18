@@ -1,27 +1,31 @@
-"""
-conftest.py — pytest configuration for the backend test suite.
+"""Shared pytest isolation for the FastAPI integration suite."""
 
-Problem: main.py imports models.analytics_event (uses JSONB) and calls
-Base.metadata.create_all() at module level. SQLite cannot create a JSONB column.
+import pytest
 
-Solution: patch database.Base.metadata.create_all with a no-op at the system
-level BEFORE main.py is ever imported, then manually create only the
-non-JSONB tables we need for testing.
+from limiter import limiter
+from tests.support import Base, app, get_db, override_get_db, test_engine
 
-This conftest must be in the tests/ directory so pytest loads it first.
-"""
-import os
-import sys
-from unittest.mock import patch
 
-# ── Force test environment BEFORE any backend module is imported ──────────────
-TEST_DB = "sqlite:///./test_password_reset.db"
-os.environ["DATABASE_URL"] = TEST_DB
-os.environ["SECRET_KEY"] = "test-secret-only"
-os.environ["REQUIRE_EMAIL_VERIFICATION"] = "false"
-os.environ["RESEND_API_KEY"] = ""
+@pytest.fixture(autouse=True)
+def isolated_application_state():
+    """Give every test a fresh schema and the same dependency override.
 
-# Add backend root to sys.path so `from main import app` works in tests.
-BACKEND_ROOT = os.path.join(os.path.dirname(__file__), "..")
-if BACKEND_ROOT not in sys.path:
-    sys.path.insert(0, os.path.abspath(BACKEND_ROOT))
+    Integration modules previously replaced the global database engine and
+    FastAPI dependency override during collection. The final imported module
+    therefore controlled every earlier module's requests. Recreating the
+    SQLite schema per test is intentionally simple, deterministic, and immune
+    to test execution order.
+    """
+
+    app.dependency_overrides[get_db] = override_get_db
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
+
+    was_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
+        yield
+    finally:
+        limiter.enabled = was_enabled
+        app.dependency_overrides[get_db] = override_get_db
+        Base.metadata.drop_all(bind=test_engine)

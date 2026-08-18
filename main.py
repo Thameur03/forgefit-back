@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import IntegrityError
 from database import engine, Base
 from routers.auth import router as auth_router
 from routers.workouts import router as workouts_router
@@ -32,13 +34,39 @@ import os
 import logging
 
 from limiter import limiter
+from brand import API_DESCRIPTION, API_TITLE
 
 logger = logging.getLogger(__name__)
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Kept enabled by default for deployment compatibility. Production operators
+# that run Alembic before startup should explicitly set this to false.
+AUTO_CREATE_TABLES = _env_flag("AUTO_CREATE_TABLES", default=True)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialize schema compatibility and idempotent default data at startup."""
+    if AUTO_CREATE_TABLES:
+        Base.metadata.create_all(bind=engine)
+    else:
+        logger.info("[Database] Automatic table creation disabled")
+    _seed_food_filters()
+    yield
+
+
 app = FastAPI(
-    title="ForgeFit API",
-    description="Backend for ForgeFit mobile app",
-    version="1.0.0"
+    title=API_TITLE,
+    description=API_DESCRIPTION,
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter
@@ -56,22 +84,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auto-create tables in development only; use Alembic migrations in production
-Base.metadata.create_all(bind=engine)
-
-
 # ── Seed default food filters ────────────────────────────────────────────────
 
 def _seed_food_filters():
-    """Populate `food_filters` with sensible defaults if the table is empty."""
+    """Insert any missing default food filters without duplicating slugs."""
     from database import SessionLocal
     from models.food_filter import FoodFilter
 
     db = SessionLocal()
     try:
-        if db.query(FoodFilter).count() > 0:
-            return
-
         defaults = [
             FoodFilter(
                 name="Fruit", slug="fruit",
@@ -115,13 +136,34 @@ def _seed_food_filters():
             ),
         ]
 
-        db.add_all(defaults)
-        db.commit()
+        existing_slugs = {
+            slug for (slug,) in db.query(FoodFilter.slug).all()
+        }
+        missing = [item for item in defaults if item.slug not in existing_slugs]
+        if not missing:
+            return
+
+        db.add_all(missing)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Another startup worker may have inserted the same unique slugs.
+            db.rollback()
+            persisted_slugs = {
+                slug for (slug,) in db.query(FoodFilter.slug).all()
+            }
+            expected_slugs = {item.slug for item in defaults}
+            if not expected_slugs.issubset(persisted_slugs):
+                # This was not the expected duplicate-slug race. Surface the
+                # original integrity failure so startup cannot mask bad data or
+                # schema drift.
+                raise
+            logger.info("[Database] Default food filters seeded concurrently")
+        except Exception:
+            db.rollback()
+            raise
     finally:
         db.close()
-
-
-_seed_food_filters()
 
 # ── Startup config log ────────────────────────────────────────────────────────
 _require_email_verification = os.getenv("REQUIRE_EMAIL_VERIFICATION", "true")
@@ -148,5 +190,4 @@ app.include_router(ai_router, prefix="/ai", tags=["AI Coach"])
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "app": "ForgeFit API"}
-
+    return {"status": "ok", "app": API_TITLE}

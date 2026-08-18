@@ -321,6 +321,35 @@ def search_food(
     return cached[:limit]
 
 
+@router.get("/local")
+def search_local_food(
+    search: str = Query("", description="Search term for local admin-managed foods"),
+    limit: int = Query(25, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Search active, admin-managed local foods without calling USDA."""
+    query = db.query(Food).filter(Food.is_active == True)
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter((Food.name.ilike(pattern)) | (Food.brand.ilike(pattern)))
+    foods = query.order_by(Food.name.asc()).limit(limit).all()
+    return [
+        {
+            "id": food.id,
+            "name": food.name,
+            "brand": food.brand,
+            "calories": food.calories,
+            "protein_g": food.protein_g,
+            "carbs_g": food.carbs_g,
+            "fat_g": food.fat_g,
+            "serving_size_g": food.serving_size_g,
+            "source": "local",
+        }
+        for food in foods
+    ]
+
+
 @router.get("/{fdc_id}")
 def get_food_detail(
     fdc_id: int,
@@ -372,7 +401,6 @@ def get_food_detail(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="USDA food service is temporarily unavailable. Please try again later.",
         )
-
 
 @router.get("/{fdc_id}/nutrients")
 async def get_food_nutrients(
@@ -438,35 +466,3 @@ async def get_food_nutrients(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="USDA food service is temporarily unavailable. Please try again later.",
         )
-
-
-@router.get("/local")
-def search_local_food(
-    search: str = Query("", description="Search term for local admin-managed foods"),
-    limit: int = Query(25, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Search local admin-managed foods by name or brand.
-    Returns active foods only. Does not call USDA.
-    """
-    query = db.query(Food).filter(Food.is_active == True)
-    if search:
-        pattern = f"%{search}%"
-        query = query.filter((Food.name.ilike(pattern)) | (Food.brand.ilike(pattern)))
-    foods = query.order_by(Food.name.asc()).limit(limit).all()
-    return [
-        {
-            "id": f.id,
-            "name": f.name,
-            "brand": f.brand,
-            "calories": f.calories,
-            "protein_g": f.protein_g,
-            "carbs_g": f.carbs_g,
-            "fat_g": f.fat_g,
-            "serving_size_g": f.serving_size_g,
-            "source": "local",
-        }
-        for f in foods
-    ]

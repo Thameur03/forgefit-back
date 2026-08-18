@@ -109,7 +109,7 @@ async def proxy_exercise_gif(url: str):
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
                         yield chunk
             except Exception as e:
-                print(f"[ForgeFit] GIF proxy stream error for {url}: {e}")
+                print(f"[Jugurtha Fit] GIF proxy stream error for {url}: {e}")
 
     # Detect content-type from HEAD request first so Flutter doesn't reject it
     content_type = "image/gif"

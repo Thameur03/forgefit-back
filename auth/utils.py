@@ -45,7 +45,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
+    to_encode.update({"exp": expire, "jti": str(uuid.uuid4()), "type": "access"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -82,7 +82,11 @@ def get_current_user(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         jti: str = payload.get("jti")
-        if email is None or jti is None:
+        token_type: str | None = payload.get("type")
+        # Access tokens issued before the explicit type claim was introduced
+        # remain valid during the compatibility window. A token explicitly
+        # marked as a refresh token must never authenticate API endpoints.
+        if email is None or jti is None or token_type == "refresh":
             raise credentials_exception
         token_data = TokenData(email=email)
         # Check if token has been revoked
@@ -110,4 +114,3 @@ def get_current_admin(
             detail="Admin access required",
         )
     return current_user
-

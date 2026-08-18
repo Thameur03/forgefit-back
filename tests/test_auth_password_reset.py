@@ -3,72 +3,16 @@ tests/test_auth_password_reset.py
 
 FastAPI integration tests for the password-reset endpoints.
 Email delivery (Resend/SMTP) is mocked — no real email is sent.
-
-SQLite compatibility note:
-  main.py imports models.analytics_event (which has a JSONB column) and calls
-  Base.metadata.create_all() at module-body level. SQLite cannot compile JSONB.
-  We patch metadata.create_all to a no-op before importing main, then call it
-  manually with only the SQLite-compatible tables we need.
+The shared test harness creates the complete current schema in isolated SQLite.
 """
 
-import os
-import sys
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-# ── 1. Force test environment FIRST ──────────────────────────────────────────
-TEST_DB = "sqlite:///./test_password_reset.db"
-os.environ["DATABASE_URL"] = TEST_DB
-os.environ["SECRET_KEY"] = "test-secret-only"
-os.environ["REQUIRE_EMAIL_VERIFICATION"] = "false"
-os.environ["RESEND_API_KEY"] = ""
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-# ── 2. Set up the SQLite test engine BEFORE main is imported ─────────────────
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import database
-
-test_engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-# Point the database module at the test engine so get_db uses our session.
-database.engine = test_engine
-
-# ── 3. Import main with create_all patched out ────────────────────────────────
-# main.py runs Base.metadata.create_all(bind=engine) at module level.
-# We intercept that call so the JSONB analytics_events table is never compiled
-# against SQLite.
-with patch.object(database.Base.metadata, "create_all"):
-    from main import app
-
-from database import get_db
 from auth.utils import hash_password, verify_password
 from models.user import User
-from limiter import limiter
-
-# ── 4. Now create only the SQLite-safe tables ─────────────────────────────────
-# Remove analytics_events (JSONB) from metadata before create_all.
-if "analytics_events" in database.Base.metadata.tables:
-    database.Base.metadata.remove(database.Base.metadata.tables["analytics_events"])
-
-database.Base.metadata.create_all(bind=test_engine)
-
-# ── 5. Override the get_db dependency ─────────────────────────────────────────
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[get_db] = override_get_db
-
-# ── 6. TestClient after all setup is done ─────────────────────────────────────
-from fastapi.testclient import TestClient
-client = TestClient(app, raise_server_exceptions=True)
+from tests.support import TestingSessionLocal, client
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -105,26 +49,13 @@ def _inject_otp(email: str, otp: str, expired: bool = False):
     db.commit()
     db.close()
 
-# Patch email + rate limiter globally for all tests.
+# Patch email globally for all tests in this module.
 @pytest.fixture(autouse=True)
-def no_real_email(monkeypatch):
-    """Disable email delivery and rate limiting for all tests."""
+def no_real_email():
+    """Disable real email delivery."""
     with patch("auth.email._send_via_resend", return_value=False), \
          patch("auth.email._send_via_smtp", return_value=False):
-        # Disable rate limiting: patch the name-mangled internal method that
-        # slowapi calls for every decorated endpoint.
-        monkeypatch.setattr(limiter, "_Limiter__evaluate_limits", lambda *a, **kw: None)
         yield
-
-
-@pytest.fixture(autouse=True)
-def clean_users():
-    """Reset the users table before each test to prevent state leakage."""
-    db = _db()
-    db.query(User).delete()
-    db.commit()
-    db.close()
-    yield
 
 
 # ── Tests: forgot-password ─────────────────────────────────────────────────────
