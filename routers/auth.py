@@ -399,6 +399,33 @@ def logout(
     Logout the current user by revoking both the access token and refresh token.
     Requires a valid access token in the Authorization header.
     """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or mismatched refresh token",
+    )
+
+    # Validate the refresh token before mutating the revocation table. A user
+    # may only revoke a refresh token belonging to their own authenticated
+    # account, and an access token cannot be substituted in this field.
+    try:
+        refresh_payload = jwt.decode(
+            data.refresh_token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+        )
+    except JWTError as exc:
+        raise credentials_exception from exc
+
+    refresh_email = refresh_payload.get("sub")
+    refresh_jti = refresh_payload.get("jti")
+    refresh_type = refresh_payload.get("type")
+    if (
+        refresh_email != current_user.email
+        or refresh_jti is None
+        or refresh_type != "refresh"
+    ):
+        raise credentials_exception
+
     # Revoke the access token
     try:
         access_payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
@@ -409,15 +436,10 @@ def logout(
     except JWTError:
         pass
 
-    # Revoke the refresh token
-    try:
-        refresh_payload = jwt.decode(data.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
-        refresh_jti = refresh_payload.get("jti")
-        if refresh_jti and not is_token_revoked(refresh_jti, db):
-            revoked_refresh = RevokedToken(token_jti=refresh_jti, user_id=current_user.id)
-            db.add(revoked_refresh)
-    except JWTError:
-        pass
+    if not is_token_revoked(refresh_jti, db):
+        revoked_refresh = RevokedToken(token_jti=refresh_jti, user_id=current_user.id)
+        db.add(revoked_refresh)
 
+    current_user.last_logout_at = datetime.now(timezone.utc)
     db.commit()
     return {"message": "Logged out successfully"}

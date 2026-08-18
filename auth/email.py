@@ -1,5 +1,5 @@
 """
-auth/email.py — Email sending for AthleteLab
+auth/email.py — Email sending for Jugurtha Fit
 Priority: Resend HTTP API → Gmail SMTP fallback
 """
 import smtplib
@@ -9,6 +9,8 @@ import traceback
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
+
+from brand import BRAND_NAME, EMAIL_TEAM_NAME
 
 load_dotenv()
 
@@ -39,7 +41,7 @@ def _domain_verified() -> bool:
 MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
 MAIL_FROM     = os.getenv("MAIL_FROM", "")
-MAIL_FROM_NAME= os.getenv("MAIL_FROM_NAME", "AthleteLab")
+MAIL_FROM_NAME= os.getenv("MAIL_FROM_NAME", BRAND_NAME)
 MAIL_SERVER   = os.getenv("MAIL_SERVER", "smtp.gmail.com")
 MAIL_PORT     = int(os.getenv("MAIL_PORT", "587"))
 MAIL_STARTTLS = os.getenv("MAIL_STARTTLS", "true").lower() == "true"
@@ -249,14 +251,14 @@ def _send_email(to_email: str, subject: str, body: str) -> bool:
 def send_verification_email(email: str, code: str) -> None:
     """Send email verification OTP."""
     logger.info("[Email] Sending verification email to %s", email)
-    subject = "Verify your AthleteLab account"
+    subject = f"Verify your {BRAND_NAME} account"
     body = (
         f"Hello,\n\n"
-        f"Your AthleteLab verification code is:\n\n"
+        f"Your {BRAND_NAME} verification code is:\n\n"
         f"    {code}\n\n"
         f"This code expires in 15 minutes.\n\n"
         f"If you did not create an account, please ignore this email.\n\n"
-        f"— The AthleteLab Team"
+        f"— {EMAIL_TEAM_NAME}"
     )
     if DEBUG:
         logger.debug(">>> DEV — Verification code for %s: %s", email, code)
@@ -266,13 +268,13 @@ def send_verification_email(email: str, code: str) -> None:
 def send_password_reset_email(email: str, code: str) -> bool:
     """Send password reset OTP. Returns True if delivery succeeded."""
     logger.info("[Email] Sending password reset email to %s", _mask_email(email))
-    subject = "Reset your AthleteLab password"
+    subject = f"Reset your {BRAND_NAME} password"
     body = (
         f"Hello,\n\n"
-        f"Your AthleteLab password reset code is:\n\n"
+        f"Your {BRAND_NAME} password reset code is:\n\n"
         f"    {code}\n\n"
         f"This code expires in 15 minutes.\n\n"
         f"If you did not request a password reset, please ignore this email.\n\n"
-        f"— The AthleteLab Team"
+        f"— {EMAIL_TEAM_NAME}"
     )
     return _send_email(email, subject, body)

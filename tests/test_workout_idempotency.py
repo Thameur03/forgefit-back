@@ -8,87 +8,15 @@ Scope:
   IntegrityError recovery). Does NOT prove the PostgreSQL partial unique index;
   that requires the manual concurrency verification in implementation_plan.md.
 
-Bootstrap:
-  1. Override DATABASE_URL + env vars before any imports.
-  2. Override database.engine + database.SessionLocal so _seed_food_filters()
-     targets the test DB when main.py is imported.
-  3. Pre-create all SQLite-safe tables (food_filters included) before import.
-  4. Patch create_all during main import to skip analytics_events JSONB.
-
-Rate-limiter fix:
-  slowapi's sync_wrapper reads request.state.view_rate_limit (set by the real
-  __evaluate_limits at extension.py line 525). When we no-op that method,
-  view_rate_limit is never set and line 771 crashes. Our replacement sets it
-  to None so sync_wrapper's _inject_headers receives a safe value.
+The shared test harness supplies a complete, foreign-key-aware SQLite schema,
+one FastAPI dependency override, and a fresh database for every test.
 """
 
-import os
-import sys
 import uuid
-import pytest
-from unittest.mock import patch
-
-# ── 1. Force test environment FIRST ───────────────────────────────────────────
-TEST_DB = "sqlite:///./test_workout_idempotency.db"
-os.environ["DATABASE_URL"] = TEST_DB
-os.environ["SECRET_KEY"] = "test-secret-only"
-os.environ["REQUIRE_EMAIL_VERIFICATION"] = "false"
-os.environ["RESEND_API_KEY"] = ""
-os.environ.setdefault("EXERCISEDB_API_KEY", "")
-os.environ.setdefault("USDA_API_KEY", "")
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-# ── 2. Override DB before any models import ────────────────────────────────────
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import database
-
-test_engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-database.engine = test_engine
-database.SessionLocal = TestingSessionLocal  # type: ignore[assignment]
-
-# ── 3. Pre-import SQLite-safe models ──────────────────────────────────────────
-import models.user
-import models.workout
-import models.nutrition
-import models.token
-import models.program
-import models.schedule
-import models.food
-import models.food_filter
-import models.admin
-# analytics_event has JSONB — do NOT import here.
-
-# ── 4. Create tables before importing main ────────────────────────────────────
-for table in list(database.Base.metadata.tables.values()):
-    if table.name != "analytics_events":
-        table.create(bind=test_engine, checkfirst=True)
-
-# ── 5. Import app (food_filters table exists; engine already patched) ─────────
-with patch.object(database.Base.metadata, "create_all"):
-    from main import app
-
-from database import get_db
 from auth.utils import hash_password
 from models.user import User
 from models.workout import Workout
-from limiter import limiter
-
-# ── 6. Override get_db ────────────────────────────────────────────────────────
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[get_db] = override_get_db
-
-# ── 7. TestClient ─────────────────────────────────────────────────────────────
-from fastapi.testclient import TestClient
-client = TestClient(app, raise_server_exceptions=True)
+from tests.support import TestingSessionLocal, client
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -127,29 +55,6 @@ def _workout_count(user_email: str, key: str | None = None) -> int:
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
-
-def _evaluate_limits_noop(request, endpoint, limits):
-    """Replacement for Limiter.__evaluate_limits that:
-    - skips rate-limit checks (so tests never 429)
-    - sets request.state.view_rate_limit = None so sync_wrapper line 771 doesn't crash.
-    """
-    request.state.view_rate_limit = None
-
-
-@pytest.fixture(autouse=True)
-def disable_rate_limit(monkeypatch):
-    monkeypatch.setattr(limiter, "_Limiter__evaluate_limits", _evaluate_limits_noop)
-
-
-@pytest.fixture(autouse=True)
-def clean_db():
-    yield
-    db = _db()
-    db.query(Workout).delete()
-    db.query(User).delete()
-    db.commit()
-    db.close()
-
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 

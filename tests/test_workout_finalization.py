@@ -10,74 +10,14 @@ Verifies:
   - client_request_id remains unchanged after PUT
   - All existing workout idempotency tests still import cleanly
 
-Bootstrap is shared with test_workout_idempotency.py conventions.
+Database and application isolation come from the shared test harness.
 """
 
-import os
-import sys
 import uuid
-import pytest
-from unittest.mock import patch
-
-# ── 1. Force test environment FIRST ───────────────────────────────────────────
-TEST_DB = "sqlite:///./test_workout_finalization.db"
-os.environ["DATABASE_URL"] = TEST_DB
-os.environ["SECRET_KEY"] = "test-secret-only"
-os.environ["REQUIRE_EMAIL_VERIFICATION"] = "false"
-os.environ["RESEND_API_KEY"] = ""
-os.environ.setdefault("EXERCISEDB_API_KEY", "")
-os.environ.setdefault("USDA_API_KEY", "")
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-# ── 2. Override DB engine before any models import ────────────────────────────
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import database
-
-test_engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-database.engine = test_engine
-database.SessionLocal = TestingSessionLocal  # type: ignore[assignment]
-
-# ── 3. Pre-import SQLite-safe models ─────────────────────────────────────────
-import models.user
-import models.workout
-import models.nutrition
-import models.token
-import models.program
-import models.schedule
-import models.food
-import models.food_filter
-import models.admin
-
-# ── 4. Create tables before importing main ────────────────────────────────────
-for table in list(database.Base.metadata.tables.values()):
-    if table.name != "analytics_events":
-        table.create(bind=test_engine, checkfirst=True)
-
-# ── 5. Import app ─────────────────────────────────────────────────────────────
-with patch.object(database.Base.metadata, "create_all"):
-    from main import app
-
-from database import get_db
 from auth.utils import hash_password
 from models.user import User
 from models.workout import Workout
-from limiter import limiter
-
-# ── 6. Override dependencies ──────────────────────────────────────────────────
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app.dependency_overrides[get_db] = override_get_db
-
-from fastapi.testclient import TestClient
-client = TestClient(app, raise_server_exceptions=True)
+from tests.support import TestingSessionLocal, client
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -118,28 +58,6 @@ def _workout_count_for_user(email: str) -> int:
     count = db.query(Workout).filter(Workout.user_id == user.id).count()
     db.close()
     return count
-
-
-def _evaluate_limits_noop(request, endpoint, limits):
-    request.state.view_rate_limit = None
-
-
-@pytest.fixture(autouse=True)
-def disable_rate_limit(monkeypatch):
-    monkeypatch.setattr(limiter, "_Limiter__evaluate_limits", _evaluate_limits_noop)
-
-
-@pytest.fixture(autouse=True)
-def clean_db():
-    yield
-    db = _db()
-    # Remove sets before workouts (foreign key)
-    from models.workout import WorkoutSet
-    db.query(WorkoutSet).delete()
-    db.query(Workout).delete()
-    db.query(User).delete()
-    db.commit()
-    db.close()
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -244,7 +162,12 @@ class TestSetsSurvivePut:
         # Log a set
         set_r = client.post(
             f"/workouts/{workout_id}/sets",
-            json={"exercise_name": "Squat", "weight_kg": 100.0, "reps": 5},
+            json={
+                "exercise_name": "Squat",
+                "sets": 1,
+                "weight_kg": 100.0,
+                "reps": 5,
+            },
             headers=headers,
         )
         assert set_r.status_code in (200, 201), set_r.text
@@ -260,8 +183,7 @@ class TestSetsSurvivePut:
         detail_r = client.get(f"/workouts/{workout_id}", headers=headers)
         assert detail_r.status_code == 200, detail_r.text
         data = detail_r.json()
-        exercises = data.get("exercises", [])
-        total_sets = sum(len(ex.get("sets", [])) for ex in exercises)
+        total_sets = len(data.get("sets", []))
         assert total_sets >= 1, f"Sets were lost after PUT — found {total_sets}"
 
 

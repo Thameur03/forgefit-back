@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, Index
+    Column, Integer, String, DateTime, ForeignKey, Index, JSON
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
@@ -17,7 +17,9 @@ class AnalyticsEvent(Base):
     event_name = Column(String(100), nullable=False, index=True)
     event_category = Column(String(50), nullable=True, index=True)
     screen = Column(String(100), nullable=True)
-    properties = Column(JSONB, nullable=True)
+    # PostgreSQL keeps native JSONB; SQLite-based integration tests use the
+    # portable JSON type without changing production storage semantics.
+    properties = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
     platform = Column(String(20), nullable=True)
     app_version = Column(String(20), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
