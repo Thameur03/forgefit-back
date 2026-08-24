@@ -94,13 +94,27 @@ def _get_batch_last_sessions(
 
 
 def _compute_totals(workout_sets: list) -> tuple:
-    """Compute total_sets count and total_volume_kg for a list of WorkoutSet objects."""
-    total_sets = len(workout_sets)
+    """Compute completed set count and volume for WorkoutSet rows."""
+    total_sets = sum(s.sets for s in workout_sets)
     total_volume_kg = sum(
         s.sets * s.reps * (s.weight_kg or 0)
         for s in workout_sets
     )
     return total_sets, total_volume_kg
+
+
+def _ordered_exercise_names(workout_sets: list) -> list[str]:
+    """Return stable, case-insensitively unique exercise names."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for workout_set in sorted(workout_sets, key=lambda item: item.id or 0):
+        name = (workout_set.exercise_name or "").strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
 
 
 def _build_workout_response(db: Session, workout: Workout, user: User) -> dict:
@@ -333,6 +347,7 @@ def list_workouts(
     
     for w in workouts:
         total_sets, total_volume_kg = _compute_totals(w.sets)
+        exercise_names = _ordered_exercise_names(w.sets)
         
         duration_minutes = (w.duration_seconds or 0) / 60
         calories = int((MET_WEIGHT_TRAINING * body_weight * duration_minutes) / 60)
@@ -348,6 +363,8 @@ def list_workouts(
                 "calories_burned": calories,
                 "total_sets": total_sets,
                 "total_volume_kg": total_volume_kg,
+                "exercise_count": len(exercise_names),
+                "exercise_names": exercise_names,
             }
         )
     return summaries

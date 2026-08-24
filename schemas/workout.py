@@ -94,6 +94,8 @@ class WorkoutSummary(BaseModel):
     calories_burned: Optional[int] = 0
     total_sets: int = 0
     total_volume_kg: float = 0.0
+    exercise_count: int = 0
+    exercise_names: List[str] = Field(default_factory=list)
     client_request_id: Optional[str] = None
 
     class Config:
