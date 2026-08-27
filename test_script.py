@@ -33,7 +33,7 @@ def test_flow():
         "email": email,
         "password": password
     })
-    print("Login Response Data:", res.text)
+    print("Login status:", res.status_code)
     token = res.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     
@@ -47,7 +47,6 @@ def test_flow():
     print("POST /workouts/ status:", res.status_code)
     try:
         workout = res.json()
-        print("POST Response Data:", workout)
         workout_id = workout["id"]
         assert workout["name"] == "Push Day", f"Expected Push Day, got {workout.get('name')}"
         assert workout["duration_seconds"] == 3600, f"Expected 3600, got {workout.get('duration_seconds')}"
@@ -79,7 +78,6 @@ def test_flow():
     print(f"\nPOST /workouts/{workout_id}/sets status:", res.status_code)
     try:
         w_set = res.json()
-        print("Set created:", w_set)
         set_id = w_set["id"]
     except Exception as e:
         print("POST set failed:", e)

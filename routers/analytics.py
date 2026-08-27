@@ -43,8 +43,7 @@ def ingest_event(
         db.commit()
     except Exception as exc:
         # Log internally but never surface to caller
-        logger.error("[Analytics] Failed to store event '%s' for user %d: %s",
-                     payload.event_name, current_user.id, exc)
+        logger.error("[Analytics] Authenticated event storage failed (%s)", type(exc).__name__)
         db.rollback()
 
     return {"status": "accepted"}
@@ -77,8 +76,7 @@ def ingest_public_event(
         db.add(event)
         db.commit()
     except Exception as exc:
-        logger.error("[Analytics] Failed to store public event '%s': %s",
-                     payload.event_name, exc)
+        logger.error("[Analytics] Public event storage failed (%s)", type(exc).__name__)
         db.rollback()
 
     return {"status": "accepted"}

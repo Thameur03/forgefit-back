@@ -60,8 +60,8 @@ def search_exercises(
             return normalized
         return []
         
-    except Exception as e:
-        logger.warning("Exercise search failed for q='%s': %s", q, e)
+    except Exception as exc:
+        logger.warning("Exercise search provider failure (%s)", type(exc).__name__)
         return []
 
 @router.get("/recent")
@@ -108,8 +108,8 @@ async def proxy_exercise_gif(url: str):
                     resp.raise_for_status()
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
                         yield chunk
-            except Exception as e:
-                print(f"[Jugurtha Fit] GIF proxy stream error for {url}: {e}")
+            except Exception as exc:
+                logger.warning("Exercise media proxy failure (%s)", type(exc).__name__)
 
     # Detect content-type from HEAD request first so Flutter doesn't reject it
     content_type = "image/gif"
@@ -151,15 +151,15 @@ def get_exercise_by_id(
             _detail_cache[cache_key] = normalized
             return normalized
         raise HTTPException(status_code=404, detail="Exercise not found")
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
             raise HTTPException(status_code=404, detail="Exercise not found")
-        logger.warning("Exercise detail fetch failed for id='%s': %s", exercise_id, e)
+        logger.warning("Exercise detail provider failure (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Exercise details unavailable")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.warning("Exercise detail fetch failed for id='%s': %s", exercise_id, e)
+    except Exception as exc:
+        logger.warning("Exercise detail provider failure (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Exercise details unavailable")
 
 @router.get("/{exercise_name}/history")

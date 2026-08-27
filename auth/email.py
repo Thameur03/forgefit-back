@@ -1,145 +1,147 @@
+"""Jugurtha Fit transactional email delivery.
+
+Resend's HTTPS API is preferred. SMTP remains an optional fallback. Real
+credentials are environment-only and are never included in diagnostics.
 """
-auth/email.py — Email sending for Jugurtha Fit
-Priority: Resend HTTP API → Gmail SMTP fallback
-"""
-import smtplib
+
 import logging
 import os
-import traceback
-from email.mime.text import MIMEText
+import smtplib
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, parseaddr
+
 from dotenv import load_dotenv
+from email_validator import EmailNotValidError, validate_email
 
 from brand import BRAND_NAME, EMAIL_TEAM_NAME
+from config import is_production
 
 load_dotenv()
-
 logger = logging.getLogger(__name__)
 
-# ── Resend (primary) ──────────────────────────────────────────────────────────
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
-
-# ── Test-mode recipient ───────────────────────────────────────────────────────
-# When the Resend sending domain is not yet verified, Resend only allows email
-# delivery to the email address associated with the Resend account.
-#
-# Set RESEND_TEST_RECIPIENT to that address (without the value, no reset email
-# is delivered in test mode).
-#
-# IMPORTANT: test-mode delivery fires ONLY when the requested recipient email
-# exactly equals RESEND_TEST_RECIPIENT.  We never redirect another user's reset
-# code to the developer's inbox.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 RESEND_TEST_RECIPIENT = os.getenv("RESEND_TEST_RECIPIENT", "").strip().lower()
-
-# Helper: True when a custom sender domain has been verified in Resend.
-_DEFAULT_SENDER = "onboarding@resend.dev"
-def _domain_verified() -> bool:
-    return bool(MAIL_FROM) and MAIL_FROM.strip() != _DEFAULT_SENDER
-
-
-# ── SMTP credentials ──────────────────────────────────────────────────────────
-MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
+MAIL_USERNAME = os.getenv("MAIL_USERNAME", "").strip()
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
-MAIL_FROM     = os.getenv("MAIL_FROM", "")
-MAIL_FROM_NAME= os.getenv("MAIL_FROM_NAME", BRAND_NAME)
-MAIL_SERVER   = os.getenv("MAIL_SERVER", "smtp.gmail.com")
-MAIL_PORT     = int(os.getenv("MAIL_PORT", "587"))
-MAIL_STARTTLS = os.getenv("MAIL_STARTTLS", "true").lower() == "true"
-MAIL_SSL_TLS  = os.getenv("MAIL_SSL_TLS", "false").lower() == "true"
-DEBUG         = os.getenv("DEBUG", "false").lower() == "true"
+MAIL_FROM = os.getenv("MAIL_FROM", "").strip()
+MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", BRAND_NAME).strip() or BRAND_NAME
+MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com").strip()
+MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
+MAIL_STARTTLS = os.getenv("MAIL_STARTTLS", "true").strip().lower() == "true"
+MAIL_SSL_TLS = os.getenv("MAIL_SSL_TLS", "false").strip().lower() == "true"
+_DEFAULT_SENDER = "onboarding@resend.dev"
 
-
-# ═══════════════════════════════════════════════════════════
-# RESEND HTTP API (primary — uses port 443, never blocked)
-# ═══════════════════════════════════════════════════════════
 
 def _mask_email(email: str) -> str:
-    """Return a privacy-safe masked representation, e.g. 'u***@example.com'."""
     at = email.find("@")
     if at <= 0:
         return "***"
     return email[0] + "***" + email[at:]
 
 
-def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
-    """Send via Resend HTTP API. Returns True on success."""
-    if not RESEND_API_KEY:
-        logger.info("[Resend] No RESEND_API_KEY — skipping")
+def _valid_email_address(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        validate_email(value, check_deliverability=False)
+        return True
+    except EmailNotValidError:
         return False
 
-    masked = _mask_email(to_email)
-    logger.info(
-        "[Resend] Attempting send to=%s domain_verified=%s",
-        masked, _domain_verified(),
+
+def _sender_parts() -> tuple[str, str]:
+    name, address = parseaddr(MAIL_FROM)
+    if not address:
+        return MAIL_FROM_NAME, ""
+    return name.strip() or MAIL_FROM_NAME, address.strip().lower()
+
+
+def _sender_header(*, sandbox: bool = False) -> str:
+    if sandbox:
+        return formataddr((MAIL_FROM_NAME, _DEFAULT_SENDER))
+    return formataddr(_sender_parts())
+
+
+def _domain_verified() -> bool:
+    """Whether a valid custom sender is configured (dashboard check is manual)."""
+    _, address = _sender_parts()
+    return _valid_email_address(address) and address != _DEFAULT_SENDER
+
+
+def _can_send_smtp() -> bool:
+    sender = _sender_parts()[1] or MAIL_USERNAME
+    return bool(
+        MAIL_USERNAME
+        and MAIL_PASSWORD
+        and MAIL_PASSWORD != "your_app_password"
+        and _valid_email_address(sender)
+        and (not is_production() or MAIL_STARTTLS or MAIL_SSL_TLS)
     )
+
+
+def email_delivery_configured() -> bool:
+    if RESEND_API_KEY:
+        if _domain_verified():
+            return True
+        if not is_production() and _valid_email_address(RESEND_TEST_RECIPIENT):
+            return True
+    return _can_send_smtp()
+
+
+def email_configuration_issue() -> str | None:
+    if email_delivery_configured():
+        return None
+    if (
+        is_production()
+        and MAIL_USERNAME
+        and MAIL_PASSWORD
+        and not (MAIL_STARTTLS or MAIL_SSL_TLS)
+    ):
+        return "Production SMTP requires STARTTLS or implicit TLS"
+    if RESEND_API_KEY and is_production() and not _domain_verified():
+        return "Resend is configured but production MAIL_FROM is not a valid custom-domain sender"
+    if RESEND_API_KEY and not _domain_verified():
+        return "Resend sandbox mode requires a valid RESEND_TEST_RECIPIENT outside production"
+    return "No usable Resend or SMTP email provider is configured"
+
+
+def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
+    if not RESEND_API_KEY:
+        return False
+    masked = _mask_email(to_email)
     try:
-        import resend  # already in requirements.txt
+        import resend
         resend.api_key = RESEND_API_KEY
-        from_addr = MAIL_FROM if _domain_verified() else _DEFAULT_SENDER
         params: resend.Emails.SendParams = {
-            "from": f"{MAIL_FROM_NAME} <{from_addr}>",
+            "from": _sender_header(sandbox=not _domain_verified()),
             "to": [to_email],
             "subject": subject,
             "text": body,
         }
-        response = resend.Emails.send(params)
-        email_id = response.get("id") if isinstance(response, dict) else getattr(response, "id", "?")
-        logger.info("[Resend] ✓ Delivered '%s' to %s — id=%s", subject, masked, email_id)
+        resend.Emails.send(params)
+        logger.info("[Resend] Email delivered to %s", masked)
         return True
-    except Exception as e:
-        logger.error(
-            "[Resend] ✗ Failed to send to %s: %s: %s",
-            masked, type(e).__name__, e,
-        )
+    except Exception as exc:
+        logger.error("[Resend] Delivery failed for %s (%s)", masked, type(exc).__name__)
         return False
-
-
-# ═══════════════════════════════════════════════════════════
-# SMTP (fallback)
-# ═══════════════════════════════════════════════════════════
-
-def _can_send_smtp() -> bool:
-    return bool(
-        MAIL_USERNAME
-        and MAIL_PASSWORD
-        and MAIL_PASSWORD not in ("your_app_password", "")
-    )
 
 
 def _send_via_smtp(to_email: str, subject: str, body: str) -> bool:
-    """
-    Send via SMTP.
-    - Port 587 → STARTTLS (Gmail, most providers)
-    - Port 465 → SSL/TLS
-    Returns True on success.
-    """
     if not _can_send_smtp():
-        logger.warning("[SMTP] Credentials not configured — skipping")
         return False
-
-    logger.info(
-        "[SMTP] Config: host=%s port=%s starttls=%s ssl=%s "
-        "username_present=%s password_present=%s from_present=%s",
-        MAIL_SERVER, MAIL_PORT, MAIL_STARTTLS, MAIL_SSL_TLS,
-        bool(MAIL_USERNAME), bool(MAIL_PASSWORD), bool(MAIL_FROM),
-    )
-
+    masked = _mask_email(to_email)
     msg = MIMEMultipart()
-    msg["From"]    = f"{MAIL_FROM_NAME} <{MAIL_FROM or MAIL_USERNAME}>"
-    msg["To"]      = to_email
+    msg["From"] = _sender_header() if _sender_parts()[1] else formataddr((MAIL_FROM_NAME, MAIL_USERNAME))
+    msg["To"] = to_email
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain"))
-
     try:
         if MAIL_SSL_TLS:
-            # Port 465 — direct SSL
-            logger.info("[SMTP] Connecting via SSL to %s:%s", MAIL_SERVER, MAIL_PORT)
             with smtplib.SMTP_SSL(MAIL_SERVER, MAIL_PORT, timeout=15) as server:
                 server.login(MAIL_USERNAME, MAIL_PASSWORD)
                 server.send_message(msg)
         else:
-            # Port 587 — STARTTLS (Gmail default)
-            logger.info("[SMTP] Connecting via STARTTLS to %s:%s", MAIL_SERVER, MAIL_PORT)
             with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=15) as server:
                 server.ehlo()
                 if MAIL_STARTTLS:
@@ -147,134 +149,54 @@ def _send_via_smtp(to_email: str, subject: str, body: str) -> bool:
                     server.ehlo()
                 server.login(MAIL_USERNAME, MAIL_PASSWORD)
                 server.send_message(msg)
-
-        logger.info("[SMTP] ✓ Delivered '%s' to %s", subject, to_email)
+        logger.info("[SMTP] Email delivered to %s", masked)
         return True
-
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error(
-            "[SMTP] ✗ Authentication failed for %s — "
-            "Check MAIL_USERNAME and MAIL_PASSWORD (Gmail needs an App Password, not your login password). "
-            "Error: %s",
-            MAIL_USERNAME, e,
-        )
-        return False
-    except smtplib.SMTPException as e:
-        logger.error("[SMTP] ✗ SMTP error sending to %s: %s: %s", to_email, type(e).__name__, e)
-        return False
-    except OSError as e:
-        logger.error(
-            "[SMTP] ✗ Network/OS error sending to %s: %s: %s — "
-            "This usually means the host cannot reach %s:%s. "
-            "Render free tier may block outbound SMTP (ports 25/465/587). "
-            "Use Resend API (port 443) instead.",
-            to_email, type(e).__name__, e, MAIL_SERVER, MAIL_PORT,
-        )
-        return False
-    except Exception as e:
-        logger.error(
-            "[SMTP] ✗ Unexpected error sending to %s: %s: %s\n%s",
-            to_email, type(e).__name__, e, traceback.format_exc(),
-        )
+    except Exception as exc:
+        logger.error("[SMTP] Delivery failed for %s (%s)", masked, type(exc).__name__)
         return False
 
-
-# ═══════════════════════════════════════════════════════════
-# DISPATCHER
-# ═══════════════════════════════════════════════════════════
 
 def _send_email(to_email: str, subject: str, body: str) -> bool:
-    """
-    Try Resend HTTP API first (port 443 — never blocked by cloud hosts),
-    then fall back to SMTP.
-
-    Test-mode gate: when the Resend domain has not yet been verified, delivery
-    is permitted ONLY when `to_email` exactly equals `RESEND_TEST_RECIPIENT`.
-    This prevents a developer from receiving another user's reset code in their
-    own inbox.
-
-    Never raises — email failure must not crash the request.
-    Returns True if the email was delivered, False otherwise.
-    """
     masked = _mask_email(to_email)
-
-    # ── Test-mode guard (unverified Resend domain) ──────────────────────────
     if RESEND_API_KEY and not _domain_verified():
-        if not RESEND_TEST_RECIPIENT:
-            logger.warning(
-                "[Email] Test mode: RESEND_TEST_RECIPIENT not set. "
-                "Cannot deliver to %s — skipping.", masked
-            )
-            return False
-        if to_email.strip().lower() != RESEND_TEST_RECIPIENT:
-            logger.info(
-                "[Email] Test mode: requested recipient %s does not match "
-                "RESEND_TEST_RECIPIENT — delivery skipped to prevent "
-                "cross-user code exposure.", masked
-            )
-            return False
-        logger.info(
-            "[Email] Test mode: recipient matches RESEND_TEST_RECIPIENT — proceeding."
-        )
-
-    # ── Try Resend ────────────────────────────────────────────────────────
-    if RESEND_API_KEY:
-        if _send_via_resend(to_email, subject, body):
-            return True
-        logger.warning("[Email] Resend failed — falling back to SMTP for %s", masked)
-
-    # ── Try SMTP ─────────────────────────────────────────────────────────
-    # NOTE: Render free tier may block outbound SMTP ports 25/465/587.
-    # Prefer the Resend API (port 443) for production.
+        if is_production():
+            logger.error("[Email] Refusing Resend sandbox sender in production")
+        elif not RESEND_TEST_RECIPIENT:
+            logger.warning("[Email] Sandbox recipient is not configured; delivery skipped")
+        elif to_email.strip().lower() != RESEND_TEST_RECIPIENT:
+            logger.info("[Email] Sandbox delivery skipped for non-test recipient %s", masked)
+        else:
+            return _send_via_resend(to_email, subject, body)
+    elif RESEND_API_KEY and _send_via_resend(to_email, subject, body):
+        return True
     if _can_send_smtp():
-        if _send_via_smtp(to_email, subject, body):
-            return True
-        logger.error(
-            "[Email] Both Resend and SMTP failed for %s. "
-            "Email NOT delivered. Check Render env vars and network access.",
-            masked,
-        )
-    elif not RESEND_API_KEY:
-        logger.error(
-            "[Email] No email provider configured. "
-            "Set RESEND_API_KEY (recommended) or MAIL_USERNAME+MAIL_PASSWORD on Render. "
-            "Email NOT sent to %s.",
-            masked,
-        )
+        return _send_via_smtp(to_email, subject, body)
+    logger.error("[Email] No delivery path succeeded for %s", masked)
     return False
 
 
-# ═══════════════════════════════════════════════════════════
-# PUBLIC API
-# ═══════════════════════════════════════════════════════════
-
-def send_verification_email(email: str, code: str) -> None:
-    """Send email verification OTP."""
-    logger.info("[Email] Sending verification email to %s", email)
-    subject = f"Verify your {BRAND_NAME} account"
-    body = (
-        f"Hello,\n\n"
-        f"Your {BRAND_NAME} verification code is:\n\n"
-        f"    {code}\n\n"
-        f"This code expires in 15 minutes.\n\n"
-        f"If you did not create an account, please ignore this email.\n\n"
-        f"— {EMAIL_TEAM_NAME}"
+def send_verification_email(email: str, code: str) -> bool:
+    logger.info("[Email] Sending verification email to %s", _mask_email(email))
+    return _send_email(
+        email,
+        f"Verify your {BRAND_NAME} account",
+        f"Hello,\n\nYour {BRAND_NAME} verification code is:\n\n    {code}\n\nThis code expires in 15 minutes.\n\nIf you did not create an account, please ignore this email.\n\n— {EMAIL_TEAM_NAME}",
     )
-    if DEBUG:
-        logger.debug(">>> DEV — Verification code for %s: %s", email, code)
-    _send_email(email, subject, body)
 
 
 def send_password_reset_email(email: str, code: str) -> bool:
-    """Send password reset OTP. Returns True if delivery succeeded."""
     logger.info("[Email] Sending password reset email to %s", _mask_email(email))
-    subject = f"Reset your {BRAND_NAME} password"
-    body = (
-        f"Hello,\n\n"
-        f"Your {BRAND_NAME} password reset code is:\n\n"
-        f"    {code}\n\n"
-        f"This code expires in 15 minutes.\n\n"
-        f"If you did not request a password reset, please ignore this email.\n\n"
-        f"— {EMAIL_TEAM_NAME}"
+    return _send_email(
+        email,
+        f"Reset your {BRAND_NAME} password",
+        f"Hello,\n\nYour {BRAND_NAME} password reset code is:\n\n    {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request a password reset, please ignore this email.\n\n— {EMAIL_TEAM_NAME}",
     )
-    return _send_email(email, subject, body)
+
+
+def send_account_deletion_email(email: str, code: str) -> bool:
+    logger.info("[Email] Sending account deletion email to %s", _mask_email(email))
+    return _send_email(
+        email,
+        f"Confirm deletion of your {BRAND_NAME} account",
+        f"Hello,\n\nA request was made to permanently delete your {BRAND_NAME} account.\n\nYour confirmation code is:\n\n    {code}\n\nThis code expires in 15 minutes. Enter it only on an official {BRAND_NAME} deletion page.\n\nIf you did not request deletion, ignore this email. Your account will not be deleted.\n\n— {EMAIL_TEAM_NAME}",
+    )

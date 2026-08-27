@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import os
 
 from database import get_db
+from config import is_production
 from models.user import User
 from models.token import RevokedToken
 from schemas.user import TokenData
@@ -20,6 +21,12 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is not set")
+if is_production() and (
+    len(SECRET_KEY) < 32 or SECRET_KEY.strip().lower().startswith("your_")
+):
+    raise RuntimeError(
+        "SECRET_KEY must be a non-placeholder value of at least 32 characters in production"
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 30

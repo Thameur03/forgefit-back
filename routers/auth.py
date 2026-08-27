@@ -1,6 +1,3 @@
-import os
-import random
-import string
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from limiter import limiter
 
+from config import require_email_verification
 from database import get_db
 from models.user import User
 from models.token import RevokedToken
@@ -25,7 +23,13 @@ from auth.utils import (
     get_current_user, create_refresh_token, is_token_revoked,
     SECRET_KEY, ALGORITHM,
 )
-from auth.email import send_verification_email, send_password_reset_email
+from auth.email import (
+    email_configuration_issue,
+    email_delivery_configured,
+    send_password_reset_email,
+    send_verification_email,
+)
+from auth.otp import generate_numeric_otp, otp_has_expired
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,25 +39,13 @@ OTP_EXPIRY_MINUTES = 15
 
 # ── Beta feature flag ───────────────────────────────────────────────────────────────
 
-def _env_bool(name: str, default: bool = True) -> bool:
-    """
-    Robustly parse a boolean env variable.
-    Treats '1', 'true', 'yes', 'on' (case-insensitive, stripped) as True.
-    Returns `default` when the variable is not set.
-    """
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in ("1", "true", "yes", "on")
-
-
-REQUIRE_EMAIL_VERIFICATION: bool = _env_bool("REQUIRE_EMAIL_VERIFICATION", default=True)
+REQUIRE_EMAIL_VERIFICATION: bool = require_email_verification()
 logger.info("[Auth] REQUIRE_EMAIL_VERIFICATION=%s", REQUIRE_EMAIL_VERIFICATION)
 
 
 def _generate_otp(length: int = 6) -> str:
-    """Generate a random numeric OTP."""
-    return "".join(random.choices(string.digits, k=length))
+    """Compatibility wrapper around the secure numeric OTP generator."""
+    return generate_numeric_otp(length)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -79,36 +71,24 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
             detail="Email already registered",
         )
 
-    if not REQUIRE_EMAIL_VERIFICATION:
-        # ── Beta mode: skip verification entirely ──────────────────────────
-        logger.info("[Auth] Email verification disabled for beta. Creating verified user.")
-        new_user = User(
-            email=user_data.email,
-            hashed_password=hash_password(user_data.password),
-            full_name=user_data.full_name,
-            is_verified=True,
-            verification_code=None,
-            verification_code_expires=None,
-            date_of_birth=user_data.date_of_birth,
-            gender=user_data.gender,
-            weight_kg=user_data.weight_kg,
-            height_cm=user_data.height_cm,
-            fitness_level=user_data.fitness_level,
+    if REQUIRE_EMAIL_VERIFICATION and not email_delivery_configured():
+        logger.error("[Auth] Registration unavailable: %s", email_configuration_issue())
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Account registration is temporarily unavailable. Please try again later.",
         )
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-        return new_user
-
     # ── Normal mode: generate OTP, send verification email ─────────────────
-    otp = _generate_otp()
+    otp = _generate_otp() if REQUIRE_EMAIL_VERIFICATION else None
     new_user = User(
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
         full_name=user_data.full_name,
-        is_verified=False,
-        verification_code=hash_password(otp),
-        verification_code_expires=datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES),
+        is_verified=not REQUIRE_EMAIL_VERIFICATION,
+        verification_code=hash_password(otp) if otp else None,
+        verification_code_expires=(
+            datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+            if otp else None
+        ),
         date_of_birth=user_data.date_of_birth,
         gender=user_data.gender,
         weight_kg=user_data.weight_kg,
@@ -116,12 +96,19 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
         fitness_level=user_data.fitness_level,
     )
     db.add(new_user)
+    if otp:
+        db.flush()
+        if not send_verification_email(new_user.email, otp):
+            db.rollback()
+            logger.error("[Auth] Registration email delivery failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Account registration is temporarily unavailable. Please try again later.",
+            )
+    else:
+        logger.info("[Auth] Email verification disabled outside production")
     db.commit()
     db.refresh(new_user)
-
-    # Send verification email (non-blocking — errors are logged, not raised)
-    send_verification_email(new_user.email, otp)
-
     return new_user
 
 
@@ -146,7 +133,7 @@ def verify_email(request: Request, data: VerifyEmailRequest, db: Session = Depen
     if (
         user.verification_code is None
         or user.verification_code_expires is None
-        or datetime.now(timezone.utc) > user.verification_code_expires
+        or otp_has_expired(user.verification_code_expires)
         or not verify_password(data.code, user.verification_code)
     ):
         raise HTTPException(
@@ -172,15 +159,15 @@ def resend_verification_code(request: Request, data: ResendVerificationRequest, 
     """Resend the email verification OTP. Returns generic message to avoid email enumeration."""
     user = db.query(User).filter(User.email == data.email).first()
 
-    if user and user.is_verified:
-        return {"message": "Email is already verified"}
-
     if user and not user.is_verified:
         otp = _generate_otp()
         user.verification_code = hash_password(otp)
         user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
-        db.commit()
-        send_verification_email(user.email, otp)
+        if send_verification_email(user.email, otp):
+            db.commit()
+        else:
+            db.rollback()
+            logger.warning("[Auth] Verification email delivery failed")
 
     # Always return a generic message
     return {"message": "If this email is registered, a new verification code has been sent"}
@@ -211,10 +198,9 @@ def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)
         )
 
     logger.info(
-        "[Auth] Login verification_check enabled=%s user_verified=%s email=%s",
+        "[Auth] Login verification_check enabled=%s user_verified=%s",
         REQUIRE_EMAIL_VERIFICATION,
         user.is_verified,
-        user.email,
     )
     # Block login for unverified users (skipped when email verification is disabled)
     if REQUIRE_EMAIL_VERIFICATION and not user.is_verified:
@@ -286,10 +272,12 @@ def forgot_password(request: Request, data: ForgotPasswordRequest, db: Session =
         otp = _generate_otp()
         user.reset_password_code = hash_password(otp)
         user.reset_password_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
-        db.commit()
         delivered = send_password_reset_email(user.email, otp)
-        if not delivered:
-            logger.warning("[Auth] Reset email delivery failed for user (details in email.py logs)")
+        if delivered:
+            db.commit()
+        else:
+            db.rollback()
+            logger.warning("[Auth] Reset email delivery failed")
 
     return {"message": "If this email exists, a reset code has been sent"}
 
@@ -312,19 +300,9 @@ def reset_password(request: Request, data: ResetPasswordRequest, db: Session = D
     if (
         user.reset_password_code is None
         or user.reset_password_code_expires is None
+        or otp_has_expired(user.reset_password_code_expires)
         or not verify_password(data.code, user.reset_password_code)
     ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired reset code",
-        )
-    # Normalize expiry to UTC regardless of whether the DB driver returns
-    # a timezone-aware or timezone-naive datetime (SQLite returns naive).
-    expires = user.reset_password_code_expires
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) > expires:
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset code",

@@ -18,7 +18,7 @@ new_user = User(
 )
 db.add(new_user)
 db.commit()
-print(f"Created user {email}")
+print("Created isolated test user")
 
 BASE_URL = "http://localhost:8081"
 
@@ -37,7 +37,6 @@ w_data = {"name": "Push Day", "duration_seconds": 3600}
 res = requests.post(f"{BASE_URL}/workouts/", json=w_data, headers=headers)
 print("POST workout status:", res.status_code)
 w = res.json()
-print("Workout response:", w)
 assert w["name"] == "Push Day"
 assert w["duration_seconds"] == 3600
 w_id = w["id"]
@@ -46,7 +45,6 @@ w_id = w["id"]
 res = requests.get(f"{BASE_URL}/workouts/", headers=headers)
 print("GET workouts status:", res.status_code)
 ws = res.json()
-print("First workout:", ws[0])
 assert ws[0]["name"] == "Push Day"
 
 # POST a set

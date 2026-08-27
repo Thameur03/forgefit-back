@@ -54,7 +54,8 @@ def _inject_otp(email: str, otp: str, expired: bool = False):
 def no_real_email():
     """Disable real email delivery."""
     with patch("auth.email._send_via_resend", return_value=False), \
-         patch("auth.email._send_via_smtp", return_value=False):
+         patch("auth.email._send_via_smtp", return_value=False), \
+         patch("routers.auth.send_password_reset_email", return_value=True):
         yield
 
 

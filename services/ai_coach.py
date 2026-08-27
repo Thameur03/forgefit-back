@@ -1,10 +1,7 @@
-import logging
 import math
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
-
-logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
@@ -221,25 +218,7 @@ class AICoachEngine:
         readiness_label = self._readiness_label(overall_score)
 
         # ── Debug logging ─────────────────────────────────────────────
-        logger.info(
-            "AI Coach scoring | "
-            "weekly_volume_kg=%.1f | previous_weekly_volume_kg=%.1f | "
-            "volume_change_percent=%s | protein_per_kg=%s | calorie_cv=%s | "
-            "training=%d | nutrition=%d | recovery=%d | overall=%d | "
-            "vol_spike_ded=%.1f | protein_ded=%.1f | cv_ded=%.1f",
-            features["weekly_volume_kg"],
-            features["previous_weekly_volume_kg"],
-            features["volume_change_percent"],
-            features["protein_per_kg"],
-            features["calorie_cv"],
-            training_score,
-            nutrition_score,
-            recovery_score,
-            overall_score,
-            breakdown.volume_spike_deduction,
-            breakdown.low_protein_deduction,
-            breakdown.calorie_cv_deduction,
-        )
+        # Exact health/fitness metrics remain only in the authenticated response.
 
         # 8. Recommendations + warnings
         recommendations, warnings = self._generate_recommendations_and_warnings(features)

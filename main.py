@@ -19,6 +19,7 @@ from routers.analytics import router as analytics_router
 from routers.schedule import router as schedule_router
 from routers.ai import router as ai_router
 from routers.account import router as account_router
+from routers.public import router as public_router
 
 import models.user
 import models.workout
@@ -30,25 +31,25 @@ import models.food
 import models.food_filter
 import models.schedule
 import models.analytics_event
-import os
+import models.account_deletion
 import logging
 
 from limiter import limiter
 from brand import API_DESCRIPTION, API_TITLE
+from config import (
+    auto_create_tables_enabled,
+    get_app_env,
+    is_production,
+    parse_cors_origins,
+    require_email_verification,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _env_flag(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-# Kept enabled by default for deployment compatibility. Production operators
-# that run Alembic before startup should explicitly set this to false.
-AUTO_CREATE_TABLES = _env_flag("AUTO_CREATE_TABLES", default=True)
+APP_ENV = get_app_env()
+AUTO_CREATE_TABLES = auto_create_tables_enabled()
+PRODUCTION = is_production()
 
 
 @asynccontextmanager
@@ -67,21 +68,22 @@ app = FastAPI(
     description=API_DESCRIPTION,
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None if PRODUCTION else "/docs",
+    redoc_url=None if PRODUCTION else "/redoc",
+    openapi_url=None if PRODUCTION else "/openapi.json",
 )
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS middleware — origins configurable via CORS_ORIGINS env variable
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
-cors_origins = [origin.strip() for origin in cors_origins]
+cors_origins = parse_cors_origins(app_env=APP_ENV)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # ── Seed default food filters ────────────────────────────────────────────────
@@ -166,13 +168,18 @@ def _seed_food_filters():
         db.close()
 
 # ── Startup config log ────────────────────────────────────────────────────────
-_require_email_verification = os.getenv("REQUIRE_EMAIL_VERIFICATION", "true")
-logger.info("[Auth] REQUIRE_EMAIL_VERIFICATION=%s", _require_email_verification)
+logger.info(
+    "[Startup] environment=%s email_verification=%s cors_origins=%d",
+    APP_ENV,
+    require_email_verification(),
+    len(cors_origins),
+)
 
 
 # Include routers
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(account_router, prefix="/account", tags=["Account"])
+app.include_router(public_router)
 app.include_router(workouts_router, prefix="/workouts", tags=["Workouts"])
 
 app.include_router(exercises_router, prefix="/exercises", tags=["Exercises"])
@@ -190,4 +197,4 @@ app.include_router(ai_router, prefix="/ai", tags=["AI Coach"])
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "app": API_TITLE}
+    return {"status": "ok"}

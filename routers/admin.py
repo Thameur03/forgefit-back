@@ -9,10 +9,7 @@ from database import get_db
 from models.user import User
 from models.admin import ProgramTemplate, ProgramTemplateDay, ProgramTemplateExercise
 from models.food import FoodCategory, Food, Micronutrient, FoodMicronutrient
-from models.program import Program, ProgramDay, ProgramExercise
-from models.workout import Workout
-from models.nutrition import NutritionLog
-from models.token import RevokedToken
+from routers.account import _delete_user_owned_records
 
 from schemas.admin import DashboardResponse, AdminUserResponse, UpdateRoleBody
 from schemas.program_template import (
@@ -171,29 +168,15 @@ def delete_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    # 1. Revoked tokens
-    db.query(RevokedToken).filter(RevokedToken.user_id == user_id).delete(synchronize_session=False)
-
-    # 2. Program exercises → program days → programs
-    program_ids = [p.id for p in db.query(Program.id).filter(Program.user_id == user_id).all()]
-    if program_ids:
-        day_ids = [d.id for d in db.query(ProgramDay.id).filter(ProgramDay.program_id.in_(program_ids)).all()]
-        if day_ids:
-            db.query(ProgramExercise).filter(
-                ProgramExercise.program_day_id.in_(day_ids)
-            ).delete(synchronize_session=False)
-        db.query(ProgramDay).filter(ProgramDay.program_id.in_(program_ids)).delete(synchronize_session=False)
-        db.query(Program).filter(Program.user_id == user_id).delete(synchronize_session=False)
-
-    # 3. Workouts (workout_sets should cascade from workout)
-    db.query(Workout).filter(Workout.user_id == user_id).delete(synchronize_session=False)
-
-    # 4. Nutrition logs
-    db.query(NutritionLog).filter(NutritionLog.user_id == user_id).delete(synchronize_session=False)
-
-    # 5. Delete user
-    db.delete(user)
-    db.commit()
+    try:
+        _delete_user_owned_records(db, user)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User deletion failed; no data was deleted",
+        ) from exc
 
     return {"message": f"User {user_id} deleted successfully"}
 

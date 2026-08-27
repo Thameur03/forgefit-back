@@ -65,15 +65,6 @@ def create_nutrition_log(
     NOTE: this endpoint saves exactly ONE nutrition-log row per call.
     There is no atomic multi-food meal transaction endpoint.
     """
-    logger.info(
-        "[Nutrition] POST /nutrition user_id=%s meal=%s food=%s calories=%s crid=%s",
-        current_user.id,
-        data.meal_name,
-        data.food_name,
-        data.calories,
-        data.client_request_id,
-    )
-
     # ── Idempotency pre-check ─────────────────────────────────────────────────
     if data.client_request_id:
         existing = (
@@ -86,9 +77,8 @@ def create_nutrition_log(
         )
         if existing:
             logger.info(
-                "[Nutrition] replay: returning existing log id=%s crid=%s",
+                "[Nutrition] idempotent replay returned existing log id=%s",
                 existing.id,
-                data.client_request_id,
             )
             from fastapi.responses import JSONResponse
             from fastapi.encoders import jsonable_encoder
@@ -143,7 +133,7 @@ def create_nutrition_log(
         raise exc
 
     db.refresh(log)
-    logger.info("[Nutrition] saved log id=%s for user_id=%s", log.id, current_user.id)
+    logger.info("[Nutrition] saved log id=%s", log.id)
     return log
 
 
@@ -166,12 +156,6 @@ def get_today_summary(
         .all()
     )
     total_calories = sum(log.calories for log in logs)
-    logger.info(
-        "[Nutrition] GET /nutrition/today user_id=%s logs=%s calories=%s",
-        current_user.id,
-        len(logs),
-        total_calories,
-    )
     return _build_daily_summary(today, logs)
 
 

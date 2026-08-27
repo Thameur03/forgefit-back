@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 # Set the complete test environment before importing application modules.
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SECRET_KEY"] = "test-secret-only"
+os.environ["APP_ENV"] = "test"
 os.environ["REQUIRE_EMAIL_VERIFICATION"] = "false"
 os.environ["RESEND_API_KEY"] = ""
 os.environ["AUTO_CREATE_TABLES"] = "false"
@@ -42,6 +43,7 @@ database.SessionLocal = TestingSessionLocal  # type: ignore[assignment]
 # Register all current ORM tables before importing the app.
 import models.admin  # noqa: E402, F401
 import models.analytics_event  # noqa: E402, F401
+import models.account_deletion  # noqa: E402, F401
 import models.food  # noqa: E402, F401
 import models.food_filter  # noqa: E402, F401
 import models.nutrition  # noqa: E402, F401

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from datetime import datetime, date
-from typing import Optional
+from typing import Literal, Optional
 
 
 class UserCreate(BaseModel):
@@ -107,6 +107,20 @@ class ResetPasswordRequest(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class AccountDeletionRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AccountDeletionConfirm(AccountDeletionRequest):
+    code: str = Field(..., pattern=r"^\d{6}$")
+    confirmation: Literal["DELETE"]
 
 
 class RefreshTokenRequest(BaseModel):

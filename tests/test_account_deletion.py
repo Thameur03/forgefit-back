@@ -1,8 +1,9 @@
 """Integration coverage for transactional self-service account deletion."""
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from auth.utils import create_access_token, hash_password
+from models.account_deletion import AccountDeletionChallenge
 from models.analytics_event import AnalyticsEvent
 from models.nutrition import NutritionLog
 from models.program import Program, ProgramDay, ProgramExercise
@@ -70,6 +71,13 @@ def _seed_user_graph(email: str, suffix: str) -> tuple[int, str]:
     )
     db.add(RevokedToken(token_jti=f"old-token-{suffix}", user_id=user.id))
     db.add(
+        AccountDeletionChallenge(
+            user_id=user.id,
+            code_hash=hash_password("123456"),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+        )
+    )
+    db.add(
         AnalyticsEvent(
             user_id=user.id,
             event_name="test_event",
@@ -118,6 +126,9 @@ def _counts(user_id: int) -> dict[str, int]:
         "revoked_tokens": db.query(RevokedToken).filter(
             RevokedToken.user_id == user_id
         ).count(),
+        "deletion_challenges": db.query(AccountDeletionChallenge).filter(
+            AccountDeletionChallenge.user_id == user_id
+        ).count(),
         "analytics_events": db.query(AnalyticsEvent).filter(
             AnalyticsEvent.user_id == user_id
         ).count(),
@@ -138,6 +149,7 @@ def _total_counts() -> dict[str, int]:
         "program_exercises": db.query(ProgramExercise).count(),
         "scheduled_workouts": db.query(ScheduledWorkout).count(),
         "revoked_tokens": db.query(RevokedToken).count(),
+        "deletion_challenges": db.query(AccountDeletionChallenge).count(),
         "analytics_events": db.query(AnalyticsEvent).count(),
     }
     db.close()
