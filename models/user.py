@@ -13,6 +13,7 @@ class User(Base):
 
     # Level 2 columns
     is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
+    verified_at = Column(DateTime(timezone=True), nullable=True)
     verification_code = Column(String, nullable=True)
     verification_code_expires = Column(DateTime(timezone=True), nullable=True)
     reset_password_code = Column(String, nullable=True)
@@ -27,5 +28,11 @@ class User(Base):
 
     # Admin / activity fields
     role = Column(String(20), nullable=False, default="user", server_default="user")
+    account_status = Column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
+    suspended_at = Column(DateTime(timezone=True), nullable=True)
+    # Incrementing this invalidates all access/refresh JWTs issued previously.
+    token_version = Column(Integer, nullable=False, default=0, server_default="0")
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     last_logout_at = Column(DateTime(timezone=True), nullable=True)

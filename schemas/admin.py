@@ -23,16 +23,11 @@ class AdminUserResponse(BaseModel):
     full_name: str
     role: str
     is_verified: bool = False
+    verified_at: Optional[datetime] = None
+    account_status: str = "active"
     created_at: datetime
     last_login_at: Optional[datetime] = None
     last_logout_at: Optional[datetime] = None
-    fitness_level: Optional[str] = None
-    weight_kg: Optional[float] = None
-    height_cm: Optional[float] = None
 
     class Config:
         from_attributes = True
-
-
-class UpdateRoleBody(BaseModel):
-    role: str  # "user" or "admin"

@@ -90,10 +90,16 @@ def get_current_user(
         email: str = payload.get("sub")
         jti: str = payload.get("jti")
         token_type: str | None = payload.get("type")
+        token_version = payload.get("ver", 0)
         # Access tokens issued before the explicit type claim was introduced
         # remain valid during the compatibility window. A token explicitly
         # marked as a refresh token must never authenticate API endpoints.
-        if email is None or jti is None or token_type == "refresh":
+        if (
+            email is None
+            or jti is None
+            or token_type == "refresh"
+            or not isinstance(token_version, int)
+        ):
             raise credentials_exception
         token_data = TokenData(email=email)
         # Check if token has been revoked
@@ -105,6 +111,13 @@ def get_current_user(
     user = db.query(User).filter(User.email == token_data.email).first()
     if user is None:
         raise credentials_exception
+    if token_version != user.token_version:
+        raise credentials_exception
+    if user.account_status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is not active",
+        )
     return user
 
 
@@ -115,9 +128,31 @@ def get_current_admin(
     Extends get_current_user by additionally verifying that the user has the
     'admin' role. Raises 403 Forbidden for non-admin users.
     """
-    if current_user.role != "admin":
+    if current_user.role not in {"admin", "superadmin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
         )
     return current_user
+
+
+def get_current_superadmin(
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> User:
+    """Require superadmin, with a safe compatibility path before bootstrap.
+
+    Existing installations contain only ``admin`` roles. Until one existing
+    administrator explicitly bootstraps themselves, legacy admins retain
+    critical access so deployment cannot lock out the owner. Once a
+    superadmin exists, only that role can perform destructive/security actions.
+    """
+    if current_user.role == "superadmin":
+        return current_user
+    has_superadmin = db.query(User.id).filter(User.role == "superadmin").first()
+    if has_superadmin is None:
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Superadmin access required",
+    )

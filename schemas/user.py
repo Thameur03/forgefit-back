@@ -1,9 +1,34 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from datetime import datetime, date
 from typing import Literal, Optional
 
 
-class UserCreate(BaseModel):
+class AnalyticsIdentityContext(BaseModel):
+    analytics_anonymous_id: Optional[str] = Field(
+        None,
+        min_length=16,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+    analytics_session_id: Optional[str] = Field(
+        None,
+        min_length=16,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+
+    @model_validator(mode="after")
+    def require_complete_analytics_identity(self):
+        if (self.analytics_anonymous_id is None) != (
+            self.analytics_session_id is None
+        ):
+            raise ValueError(
+                "analytics_anonymous_id and analytics_session_id must be provided together"
+            )
+        return self
+
+
+class UserCreate(AnalyticsIdentityContext):
     email: EmailStr
     password: str = Field(..., max_length=128)
     full_name: str = Field(..., min_length=1, max_length=100)
@@ -131,7 +156,7 @@ class LogoutRequest(BaseModel):
     refresh_token: str
 
 
-class VerifyEmailRequest(BaseModel):
+class VerifyEmailRequest(AnalyticsIdentityContext):
     email: EmailStr
     code: str = Field(..., min_length=6, max_length=6)
 

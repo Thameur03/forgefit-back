@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 
@@ -8,13 +8,13 @@ from typing import Optional, List
 # ──────────────────────────────────────────────
 
 class FoodCategoryCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=1000)
 
 
 class FoodCategoryUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=1000)
 
 
 class FoodCategoryResponse(BaseModel):
@@ -33,17 +33,17 @@ class FoodCategoryResponse(BaseModel):
 # ──────────────────────────────────────────────
 
 class MicronutrientCreate(BaseModel):
-    name: str
-    unit: str
-    rda: Optional[float] = None
-    category: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100)
+    unit: str = Field(..., min_length=1, max_length=20)
+    rda: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    category: Optional[str] = Field(None, max_length=50)
 
 
 class MicronutrientUpdate(BaseModel):
-    name: Optional[str] = None
-    unit: Optional[str] = None
-    rda: Optional[float] = None
-    category: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    unit: Optional[str] = Field(None, min_length=1, max_length=20)
+    rda: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    category: Optional[str] = Field(None, max_length=50)
 
 
 class MicronutrientResponse(BaseModel):
@@ -64,14 +64,14 @@ class MicronutrientResponse(BaseModel):
 # ──────────────────────────────────────────────
 
 class FoodMicronutrientCreate(BaseModel):
-    micronutrient_id: int
-    amount: float
-    unit: str
+    micronutrient_id: int = Field(..., ge=1)
+    amount: float = Field(..., ge=0, allow_inf_nan=False)
+    unit: str = Field(..., min_length=1, max_length=20)
 
 
 class FoodMicronutrientUpdate(BaseModel):
-    amount: Optional[float] = None
-    unit: Optional[str] = None
+    amount: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    unit: Optional[str] = Field(None, min_length=1, max_length=20)
 
 
 class FoodMicronutrientResponse(BaseModel):
@@ -91,30 +91,30 @@ class FoodMicronutrientResponse(BaseModel):
 # ──────────────────────────────────────────────
 
 class FoodCreate(BaseModel):
-    name: str
-    brand: Optional[str] = None
-    category_id: Optional[int] = None
-    calories: float
-    protein_g: float = 0.0
-    carbs_g: float = 0.0
-    fat_g: float = 0.0
-    serving_size_g: float = 100.0
-    barcode: Optional[str] = None
-    fdc_id: Optional[int] = None
+    name: str = Field(..., min_length=1, max_length=255)
+    brand: Optional[str] = Field(None, max_length=100)
+    category_id: Optional[int] = Field(None, ge=1)
+    calories: float = Field(..., ge=0, le=10000, allow_inf_nan=False)
+    protein_g: float = Field(0.0, ge=0, le=1000, allow_inf_nan=False)
+    carbs_g: float = Field(0.0, ge=0, le=1000, allow_inf_nan=False)
+    fat_g: float = Field(0.0, ge=0, le=1000, allow_inf_nan=False)
+    serving_size_g: float = Field(100.0, gt=0, le=100000, allow_inf_nan=False)
+    barcode: Optional[str] = Field(None, max_length=50)
+    fdc_id: Optional[int] = Field(None, ge=1)
     is_active: bool = True
 
 
 class FoodUpdate(BaseModel):
-    name: Optional[str] = None
-    brand: Optional[str] = None
-    category_id: Optional[int] = None
-    calories: Optional[float] = None
-    protein_g: Optional[float] = None
-    carbs_g: Optional[float] = None
-    fat_g: Optional[float] = None
-    serving_size_g: Optional[float] = None
-    barcode: Optional[str] = None
-    fdc_id: Optional[int] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    brand: Optional[str] = Field(None, max_length=100)
+    category_id: Optional[int] = Field(None, ge=1)
+    calories: Optional[float] = Field(None, ge=0, le=10000, allow_inf_nan=False)
+    protein_g: Optional[float] = Field(None, ge=0, le=1000, allow_inf_nan=False)
+    carbs_g: Optional[float] = Field(None, ge=0, le=1000, allow_inf_nan=False)
+    fat_g: Optional[float] = Field(None, ge=0, le=1000, allow_inf_nan=False)
+    serving_size_g: Optional[float] = Field(None, gt=0, le=100000, allow_inf_nan=False)
+    barcode: Optional[str] = Field(None, max_length=50)
+    fdc_id: Optional[int] = Field(None, ge=1)
     is_active: Optional[bool] = None
 
 

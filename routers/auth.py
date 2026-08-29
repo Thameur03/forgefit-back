@@ -12,6 +12,7 @@ from config import require_email_verification
 from database import get_db
 from models.user import User
 from models.token import RevokedToken
+from models.analytics_event import AnalyticsEvent
 from schemas.user import (
     UserCreate, UserResponse, Token, LoginBody,
     ForgotPasswordRequest, ResetPasswordRequest, MessageResponse,
@@ -30,11 +31,13 @@ from auth.email import (
     send_verification_email,
 )
 from auth.otp import generate_numeric_otp, otp_has_expired
+from services.admin_operations import add_admin_audit_event, add_operational_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 OTP_EXPIRY_MINUTES = 15
+ANALYTICS_IDENTITY_WINDOW = timedelta(days=7)
 
 
 # ── Beta feature flag ───────────────────────────────────────────────────────────────
@@ -46,6 +49,58 @@ logger.info("[Auth] REQUIRE_EMAIL_VERIFICATION=%s", REQUIRE_EMAIL_VERIFICATION)
 def _generate_otp(length: int = 6) -> str:
     """Compatibility wrapper around the secure numeric OTP generator."""
     return generate_numeric_otp(length)
+
+
+def _claim_registration_session(
+    db: Session,
+    *,
+    user: User,
+    anonymous_id: str | None,
+    session_id: str | None,
+    now: datetime,
+) -> int:
+    """Attach only one exact, recent pre-auth session to the new account."""
+    if not anonymous_id or not session_id:
+        return 0
+    return (
+        db.query(AnalyticsEvent)
+        .filter(
+            AnalyticsEvent.user_id.is_(None),
+            AnalyticsEvent.anonymous_id == anonymous_id,
+            AnalyticsEvent.session_id == session_id,
+            AnalyticsEvent.occurred_at >= now - ANALYTICS_IDENTITY_WINDOW,
+        )
+        .update(
+            {
+                AnalyticsEvent.user_id: user.id,
+                AnalyticsEvent.identity_linked_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+
+
+def _add_server_analytics_event(
+    db: Session,
+    *,
+    user: User,
+    event_name: str,
+    now: datetime,
+    anonymous_id: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    """Record conversion milestones in the account transaction itself."""
+    db.add(
+        AnalyticsEvent(
+            user_id=user.id,
+            anonymous_id=anonymous_id,
+            session_id=session_id,
+            event_name=event_name,
+            event_category="auth",
+            occurred_at=now,
+            identity_linked_at=now if anonymous_id and session_id else None,
+        )
+    )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -84,6 +139,7 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
         hashed_password=hash_password(user_data.password),
         full_name=user_data.full_name,
         is_verified=not REQUIRE_EMAIL_VERIFICATION,
+        verified_at=datetime.now(timezone.utc) if not REQUIRE_EMAIL_VERIFICATION else None,
         verification_code=hash_password(otp) if otp else None,
         verification_code_expires=(
             datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
@@ -96,10 +152,18 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
         fitness_level=user_data.fitness_level,
     )
     db.add(new_user)
+    db.flush()
     if otp:
-        db.flush()
         if not send_verification_email(new_user.email, otp):
             db.rollback()
+            add_operational_event(
+                db,
+                category="email",
+                event_name="verification_email_delivery",
+                status="failed",
+                error_code="provider_rejected",
+            )
+            db.commit()
             logger.error("[Auth] Registration email delivery failed")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -107,6 +171,27 @@ def register(request: Request, user_data: UserCreate, db: Session = Depends(get_
             )
     else:
         logger.info("[Auth] Email verification disabled outside production")
+
+    analytics_now = datetime.now(timezone.utc)
+    _claim_registration_session(
+        db,
+        user=new_user,
+        anonymous_id=user_data.analytics_anonymous_id,
+        session_id=user_data.analytics_session_id,
+        now=analytics_now,
+    )
+    # The current mobile signup flow collects the complete onboarding profile
+    # before this registration request, so these two milestones are committed
+    # atomically with the account instead of relying on a best-effort client POST.
+    for event_name in ("signup_completed", "onboarding_completed"):
+        _add_server_analytics_event(
+            db,
+            user=new_user,
+            event_name=event_name,
+            now=analytics_now,
+            anonymous_id=user_data.analytics_anonymous_id,
+            session_id=user_data.analytics_session_id,
+        )
     db.commit()
     db.refresh(new_user)
     return new_user
@@ -142,8 +227,25 @@ def verify_email(request: Request, data: VerifyEmailRequest, db: Session = Depen
         )
 
     user.is_verified = True
+    user.verified_at = datetime.now(timezone.utc)
     user.verification_code = None
     user.verification_code_expires = None
+    verification_now = datetime.now(timezone.utc)
+    _claim_registration_session(
+        db,
+        user=user,
+        anonymous_id=data.analytics_anonymous_id,
+        session_id=data.analytics_session_id,
+        now=verification_now,
+    )
+    _add_server_analytics_event(
+        db,
+        user=user,
+        event_name="email_verification_completed",
+        now=verification_now,
+        anonymous_id=data.analytics_anonymous_id,
+        session_id=data.analytics_session_id,
+    )
     db.commit()
 
     return {"message": "Email verified successfully"}
@@ -164,9 +266,23 @@ def resend_verification_code(request: Request, data: ResendVerificationRequest, 
         user.verification_code = hash_password(otp)
         user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
         if send_verification_email(user.email, otp):
+            add_operational_event(
+                db,
+                category="email",
+                event_name="verification_email_delivery",
+                status="succeeded",
+            )
             db.commit()
         else:
             db.rollback()
+            add_operational_event(
+                db,
+                category="email",
+                event_name="verification_email_delivery",
+                status="failed",
+                error_code="provider_rejected",
+            )
+            db.commit()
             logger.warning("[Auth] Verification email delivery failed")
 
     # Always return a generic message
@@ -211,10 +327,19 @@ def login(request: Request, login_data: LoginBody, db: Session = Depends(get_db)
 
     # Track last login time
     user.last_login_at = datetime.now(timezone.utc)
+    if user.role in {"admin", "superadmin"}:
+        add_admin_audit_event(
+            db,
+            admin=user,
+            action="admin.login",
+            target_type="admin_session",
+            target_id=user.id,
+        )
     db.commit()
 
-    access_token = create_access_token(data={"sub": user.email})
-    refresh_token = create_refresh_token(data={"sub": user.email})
+    token_claims = {"sub": user.email, "ver": user.token_version}
+    access_token = create_access_token(data=token_claims)
+    refresh_token = create_refresh_token(data=token_claims)
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
@@ -274,9 +399,23 @@ def forgot_password(request: Request, data: ForgotPasswordRequest, db: Session =
         user.reset_password_code_expires = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
         delivered = send_password_reset_email(user.email, otp)
         if delivered:
+            add_operational_event(
+                db,
+                category="email",
+                event_name="password_reset_email_delivery",
+                status="succeeded",
+            )
             db.commit()
         else:
             db.rollback()
+            add_operational_event(
+                db,
+                category="email",
+                event_name="password_reset_email_delivery",
+                status="failed",
+                error_code="provider_rejected",
+            )
+            db.commit()
             logger.warning("[Auth] Reset email delivery failed")
 
     return {"message": "If this email exists, a reset code has been sent"}
@@ -308,6 +447,7 @@ def reset_password(request: Request, data: ResetPasswordRequest, db: Session = D
             detail="Invalid or expired reset code",
         )
     user.hashed_password = hash_password(data.new_password)
+    user.token_version += 1
     user.reset_password_code = None
     user.reset_password_code_expires = None
     db.commit()
@@ -333,7 +473,13 @@ def refresh_tokens(data: RefreshTokenRequest, db: Session = Depends(get_db)):
         email: str = payload.get("sub")
         jti: str = payload.get("jti")
         token_type: str = payload.get("type")
-        if email is None or token_type != "refresh" or jti is None:
+        token_version = payload.get("ver", 0)
+        if (
+            email is None
+            or token_type != "refresh"
+            or jti is None
+            or not isinstance(token_version, int)
+        ):
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -346,6 +492,8 @@ def refresh_tokens(data: RefreshTokenRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == email).first()
     if user is None:
         raise credentials_exception
+    if user.account_status != "active" or token_version != user.token_version:
+        raise credentials_exception
 
     # Revoke the old refresh token
     revoked = RevokedToken(token_jti=jti, user_id=user.id)
@@ -353,8 +501,9 @@ def refresh_tokens(data: RefreshTokenRequest, db: Session = Depends(get_db)):
     db.commit()
 
     # Issue new tokens
-    new_access_token = create_access_token(data={"sub": user.email})
-    new_refresh_token = create_refresh_token(data={"sub": user.email})
+    token_claims = {"sub": user.email, "ver": user.token_version}
+    new_access_token = create_access_token(data=token_claims)
+    new_refresh_token = create_refresh_token(data=token_claims)
     return {
         "access_token": new_access_token,
         "refresh_token": new_refresh_token,
@@ -418,6 +567,13 @@ def logout(
         revoked_refresh = RevokedToken(token_jti=refresh_jti, user_id=current_user.id)
         db.add(revoked_refresh)
 
-    current_user.last_logout_at = datetime.now(timezone.utc)
+    logout_now = datetime.now(timezone.utc)
+    current_user.last_logout_at = logout_now
+    _add_server_analytics_event(
+        db,
+        user=current_user,
+        event_name="logout_completed",
+        now=logout_now,
+    )
     db.commit()
     return {"message": "Logged out successfully"}

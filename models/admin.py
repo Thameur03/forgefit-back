@@ -1,7 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from sqlalchemy import DateTime
 from database import Base
 
 
@@ -15,7 +14,7 @@ class ProgramTemplate(Base):
     days_per_week = Column(Integer, nullable=True)
     difficulty = Column(String(50), nullable=True)  # beginner, intermediate, advanced
     goal = Column(String(100), nullable=True)       # strength, hypertrophy, endurance
-    is_active = Column(Boolean, default=True, nullable=False, server_default="true")
+    is_active = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -44,6 +43,21 @@ class ProgramTemplateDay(Base):
         order_by="ProgramTemplateExercise.order_index",
     )
 
+    __table_args__ = (
+        Index(
+            "ux_program_template_days_number",
+            "template_id",
+            "day_number",
+            unique=True,
+        ),
+        Index(
+            "ux_program_template_days_order",
+            "template_id",
+            "order_index",
+            unique=True,
+        ),
+    )
+
 
 class ProgramTemplateExercise(Base):
     __tablename__ = "program_template_exercises"
@@ -58,3 +72,12 @@ class ProgramTemplateExercise(Base):
     order_index = Column(Integer, nullable=False, default=0)
 
     day = relationship("ProgramTemplateDay", back_populates="exercises")
+
+    __table_args__ = (
+        Index(
+            "ux_program_template_exercises_order",
+            "day_id",
+            "order_index",
+            unique=True,
+        ),
+    )

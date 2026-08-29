@@ -44,9 +44,11 @@ database.SessionLocal = TestingSessionLocal  # type: ignore[assignment]
 import models.admin  # noqa: E402, F401
 import models.analytics_event  # noqa: E402, F401
 import models.account_deletion  # noqa: E402, F401
+import models.admin_audit  # noqa: E402, F401
 import models.food  # noqa: E402, F401
 import models.food_filter  # noqa: E402, F401
 import models.nutrition  # noqa: E402, F401
+import models.operational_event  # noqa: E402, F401
 import models.program  # noqa: E402, F401
 import models.schedule  # noqa: E402, F401
 import models.token  # noqa: E402, F401

@@ -47,6 +47,13 @@ def test_list_exposes_existing_aggregate_and_exercise_metadata():
         )
         assert response.status_code == 201, response.text
 
+    finalized = client.put(
+        f"/workouts/{workout_id}",
+        json={"completed": True},
+        headers=headers,
+    )
+    assert finalized.status_code == 200, finalized.text
+
     response = client.get("/workouts/", headers=headers)
     assert response.status_code == 200, response.text
     summary = response.json()[0]
@@ -62,6 +69,12 @@ def test_list_keeps_legacy_missing_duration_honest():
     headers = _login("summary-legacy@example.com")
     created = client.post("/workouts/", json={"name": "Legacy"}, headers=headers)
     assert created.status_code == 201, created.text
+    finalized = client.put(
+        f"/workouts/{created.json()['id']}",
+        json={"completed": True},
+        headers=headers,
+    )
+    assert finalized.status_code == 200, finalized.text
 
     response = client.get("/workouts/", headers=headers)
     assert response.status_code == 200, response.text

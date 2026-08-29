@@ -16,6 +16,7 @@ from models.user import User
 from models.food import Food
 from models.food_filter import FoodFilter
 from auth.utils import get_current_user
+from services.admin_operations import record_operational_event
 
 load_dotenv()
 
@@ -808,6 +809,12 @@ def search_food(
             _stale_search_cache[cache_key] = cached
 
         except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
+            record_operational_event(
+                category="external",
+                event_name="usda_request",
+                status="failed",
+                error_code="search_failed",
+            )
             cached = _stale_search_cache.get(cache_key)
             if cached is None:
                 raise HTTPException(
@@ -908,6 +915,12 @@ def get_food_detail(
     except HTTPException:
         raise
     except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
+        record_operational_event(
+            category="external",
+            event_name="usda_request",
+            status="failed",
+            error_code="detail_failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="USDA food service is temporarily unavailable. Please try again later.",
@@ -973,6 +986,12 @@ async def get_food_nutrients(
     except HTTPException:
         raise
     except (httpx.TimeoutException, httpx.ConnectError):
+        record_operational_event(
+            category="external",
+            event_name="usda_request",
+            status="failed",
+            error_code="nutrients_failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="USDA food service is temporarily unavailable. Please try again later.",

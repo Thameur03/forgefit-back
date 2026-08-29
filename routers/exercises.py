@@ -13,6 +13,7 @@ from database import get_db
 from models.user import User
 from models.workout import Workout, WorkoutSet
 from auth.utils import get_current_user
+from services.admin_operations import record_operational_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,6 +63,12 @@ def search_exercises(
         
     except Exception as exc:
         logger.warning("Exercise search provider failure (%s)", type(exc).__name__)
+        record_operational_event(
+            category="external",
+            event_name="exercise_db_request",
+            status="failed",
+            error_code="search_failed",
+        )
         return []
 
 @router.get("/recent")
@@ -73,7 +80,10 @@ def get_recent_exercises(
     results = (
         db.query(WorkoutSet.exercise_name)
         .join(Workout, WorkoutSet.workout_id == Workout.id)
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .group_by(WorkoutSet.exercise_name)
         .order_by(func.max(Workout.date).desc())
         .limit(8)
@@ -155,11 +165,23 @@ def get_exercise_by_id(
         if exc.response.status_code == 404:
             raise HTTPException(status_code=404, detail="Exercise not found")
         logger.warning("Exercise detail provider failure (%s)", type(exc).__name__)
+        record_operational_event(
+            category="external",
+            event_name="exercise_db_request",
+            status="failed",
+            error_code="http_error",
+        )
         raise HTTPException(status_code=503, detail="Exercise details unavailable")
     except HTTPException:
         raise
     except Exception as exc:
         logger.warning("Exercise detail provider failure (%s)", type(exc).__name__)
+        record_operational_event(
+            category="external",
+            event_name="exercise_db_request",
+            status="failed",
+            error_code="request_failed",
+        )
         raise HTTPException(status_code=503, detail="Exercise details unavailable")
 
 @router.get("/{exercise_name}/history")
@@ -180,6 +202,7 @@ def get_exercise_history(
         .join(Workout, WorkoutSet.workout_id == Workout.id)
         .filter(
             Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
             func.lower(WorkoutSet.exercise_name) == exercise_name.lower(),
         )
         .order_by(Workout.date.desc(), WorkoutSet.id.desc())

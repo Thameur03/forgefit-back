@@ -25,6 +25,7 @@ from models.token import RevokedToken
 from models.user import User
 from models.workout import Workout
 from schemas.user import AccountDeletionConfirm, AccountDeletionRequest, MessageResponse
+from services.admin_operations import add_operational_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -122,9 +123,23 @@ def request_account_deletion(
     )
     db.flush()
     if send_account_deletion_email(user.email, code):
+        add_operational_event(
+            db,
+            category="email",
+            event_name="account_deletion_email_delivery",
+            status="succeeded",
+        )
         db.commit()
     else:
         db.rollback()
+        add_operational_event(
+            db,
+            category="email",
+            event_name="account_deletion_email_delivery",
+            status="failed",
+            error_code="provider_rejected",
+        )
+        db.commit()
         logger.warning("[Account deletion] Confirmation email delivery failed")
     return {"message": _REQUEST_MESSAGE}
 

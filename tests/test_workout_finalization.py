@@ -78,15 +78,23 @@ class TestPutUpdatesExistingRow:
         # Finalize via PUT (mimics finalizeWorkout())
         put_r = client.put(
             f"/workouts/{workout_id}",
-            json={"name": "Leg Day Final", "duration_seconds": 3600, "calories_burned": 400},
+            json={
+                "name": "Leg Day Final",
+                "duration_seconds": 3600,
+                "calories_burned": 400,
+                "completed": True,
+            },
             headers=headers,
         )
         assert put_r.status_code == 200, put_r.text
+        assert put_r.json()["completed_at"] is not None
 
         row = _workout_row(workout_id)
         assert row is not None
         assert row.name == "Leg Day Final"
         assert row.duration_seconds == 3600
+        assert row.completed_at is not None
+        assert row.completion_inferred is False
 
     def test_put_creates_no_additional_row(self):
         """After POST + PUT, exactly one workout row exists for this user."""
@@ -145,6 +153,90 @@ class TestRepeatedPutIdempotent:
 
         count = _workout_count_for_user("repeated-put-count@example.com")
         assert count == 1, f"Expected 1 row, got {count}"
+
+    def test_repeated_explicit_completion_preserves_original_timestamp(self):
+        """Retrying completed=true never creates a second completion instant."""
+        headers = _make_user("repeated-completion@example.com")
+        created = client.post(
+            "/workouts/",
+            json={"client_request_id": str(uuid.uuid4())},
+            headers=headers,
+        )
+        workout_id = created.json()["id"]
+        payload = {
+            "name": "Completed once",
+            "duration_seconds": 1200,
+            "completed": True,
+        }
+
+        first = client.put(f"/workouts/{workout_id}", json=payload, headers=headers)
+        second = client.put(f"/workouts/{workout_id}", json=payload, headers=headers)
+
+        assert first.status_code == second.status_code == 200
+        assert second.json()["completed_at"] == first.json()["completed_at"]
+        row = _workout_row(workout_id)
+        assert row.completion_inferred is False
+
+
+class TestCompletionVisibilityAndCompatibility:
+    """Only finalized rows count, while released clients remain compatible."""
+
+    def test_draft_shell_is_not_returned_in_workout_history(self):
+        headers = _make_user("draft-hidden@example.com")
+        created = client.post(
+            "/workouts/",
+            json={"client_request_id": str(uuid.uuid4()), "name": "In progress"},
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+        workout_id = created.json()["id"]
+
+        history = client.get("/workouts/", headers=headers)
+
+        assert history.status_code == 200, history.text
+        assert all(item["id"] != workout_id for item in history.json())
+        row = _workout_row(workout_id)
+        assert row.completed_at is None
+        assert row.completion_inferred is False
+
+    def test_legacy_positive_duration_finalization_is_marked_inferred(self):
+        headers = _make_user("legacy-finalization@example.com")
+        created = client.post(
+            "/workouts/",
+            json={"client_request_id": str(uuid.uuid4())},
+            headers=headers,
+        )
+        workout_id = created.json()["id"]
+
+        finalized = client.put(
+            f"/workouts/{workout_id}",
+            json={"name": "Legacy client", "duration_seconds": 900},
+            headers=headers,
+        )
+
+        assert finalized.status_code == 200, finalized.text
+        assert finalized.json()["completed_at"] is not None
+        row = _workout_row(workout_id)
+        assert row.completed_at is not None
+        assert row.completion_inferred is True
+
+    def test_negative_duration_is_rejected_without_finalizing(self):
+        headers = _make_user("negative-duration@example.com")
+        created = client.post(
+            "/workouts/",
+            json={"client_request_id": str(uuid.uuid4())},
+            headers=headers,
+        )
+        workout_id = created.json()["id"]
+
+        response = client.put(
+            f"/workouts/{workout_id}",
+            json={"duration_seconds": -1, "completed": True},
+            headers=headers,
+        )
+
+        assert response.status_code == 422
+        assert _workout_row(workout_id).completed_at is None
 
 
 class TestSetsSurvivePut:

@@ -10,6 +10,7 @@ from auth.utils import (
     hash_password,
 )
 from models.token import RevokedToken
+from models.analytics_event import AnalyticsEvent
 from models.user import User
 from tests.support import TestingSessionLocal, client
 
@@ -52,10 +53,19 @@ def test_logout_revokes_matching_access_and_refresh_tokens():
         row.token_jti: row.user_id for row in db.query(RevokedToken).all()
     }
     user = db.query(User).filter(User.id == user_id).one()
+    logout_events = (
+        db.query(AnalyticsEvent)
+        .filter(
+            AnalyticsEvent.user_id == user_id,
+            AnalyticsEvent.event_name == "logout_completed",
+        )
+        .count()
+    )
     db.close()
     assert revoked[_jti(access_token)] == user_id
     assert revoked[_jti(refresh_token)] == user_id
     assert user.last_logout_at is not None
+    assert logout_events == 1
 
     rejected = client.get(
         "/auth/me",

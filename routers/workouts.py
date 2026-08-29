@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -36,6 +36,7 @@ def _get_last_session(
         .join(Workout, WorkoutSet.workout_id == Workout.id)
         .filter(
             Workout.user_id == user_id,
+            Workout.completed_at.is_not(None),
             func.lower(WorkoutSet.exercise_name) == exercise_name.lower(),
             Workout.date < before_date,
         )
@@ -72,6 +73,7 @@ def _get_batch_last_sessions(
         .join(Workout, WorkoutSet.workout_id == Workout.id)
         .filter(
             Workout.user_id == user_id,
+            Workout.completed_at.is_not(None),
             func.lower(WorkoutSet.exercise_name).in_(lower_names),
             Workout.date < before_date,
         )
@@ -159,6 +161,7 @@ def _build_workout_response(db: Session, workout: Workout, user: User) -> dict:
         "total_sets": total_sets,
         "total_volume_kg": total_volume_kg,
         "client_request_id": workout.client_request_id,
+        "completed_at": workout.completed_at,
     }
 
 
@@ -334,7 +337,10 @@ def list_workouts(
     workouts = (
         db.query(Workout)
         .options(joinedload(Workout.sets))
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .order_by(Workout.date.desc(), Workout.id.desc())
         .offset(offset)
         .limit(limit)
@@ -365,6 +371,7 @@ def list_workouts(
                 "total_volume_kg": total_volume_kg,
                 "exercise_count": len(exercise_names),
                 "exercise_names": exercise_names,
+                "completed_at": w.completed_at,
             }
         )
     return summaries
@@ -427,7 +434,20 @@ def update_workout(
         workout.duration_seconds = data.duration_seconds
     if data.calories_burned is not None:
         workout.calories_burned = data.calories_burned
-        
+    if data.completed is True and workout.completed_at is None:
+        workout.completed_at = datetime.now(timezone.utc)
+        workout.completion_inferred = False
+    elif (
+        data.completed is None
+        and workout.completed_at is None
+        and data.duration_seconds is not None
+        and data.duration_seconds > 0
+    ):
+        # Compatibility for already-released clients whose finalization PUT
+        # predates the explicit completed=true contract.
+        workout.completed_at = datetime.now(timezone.utc)
+        workout.completion_inferred = True
+
     db.commit()
     db.refresh(workout)
     return _build_workout_response(db, workout, current_user)

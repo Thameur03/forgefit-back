@@ -201,7 +201,10 @@ def get_workout_stats(
     # Total workouts
     total_workouts = (
         db.query(func.count(Workout.id))
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .scalar()
     ) or 0
 
@@ -212,7 +215,10 @@ def get_workout_stats(
     total_sets = (
         db.query(func.count(WorkoutSet.id))
         .join(Workout, WorkoutSet.workout_id == Workout.id)
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .scalar()
     ) or 0
 
@@ -220,14 +226,21 @@ def get_workout_stats(
     total_volume = (
         db.query(func.sum(WorkoutSet.sets * WorkoutSet.reps * WorkoutSet.weight_kg))
         .join(Workout, WorkoutSet.workout_id == Workout.id)
-        .filter(Workout.user_id == current_user.id, WorkoutSet.weight_kg.isnot(None))
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+            WorkoutSet.weight_kg.isnot(None),
+        )
         .scalar()
     ) or 0.0
 
     # Avg workouts per week
     first_workout_date = (
         db.query(func.min(Workout.date))
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .scalar()
     )
     today = date.today()
@@ -238,7 +251,10 @@ def get_workout_stats(
     most_frequent_row = (
         db.query(WorkoutSet.exercise_name, func.count(WorkoutSet.id).label("cnt"))
         .join(Workout, WorkoutSet.workout_id == Workout.id)
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .group_by(WorkoutSet.exercise_name)
         .order_by(func.count(WorkoutSet.id).desc())
         .first()
@@ -248,7 +264,10 @@ def get_workout_stats(
     # Streaks
     workout_date_rows = (
         db.query(Workout.date)
-        .filter(Workout.user_id == current_user.id)
+        .filter(
+            Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
+        )
         .distinct()
         .order_by(Workout.date.asc())
         .all()
@@ -343,6 +362,7 @@ def get_personal_records(
         .join(Workout, WorkoutSet.workout_id == Workout.id)
         .filter(
             Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
             WorkoutSet.weight_kg.isnot(None),
         )
         .group_by(WorkoutSet.exercise_name)
@@ -358,6 +378,7 @@ def get_personal_records(
             .join(WorkoutSet, WorkoutSet.workout_id == Workout.id)
             .filter(
                 Workout.user_id == current_user.id,
+                Workout.completed_at.is_not(None),
                 WorkoutSet.exercise_name == row.exercise_name,
                 WorkoutSet.weight_kg == row.max_weight,
             )
@@ -405,6 +426,7 @@ def get_weekly_volume(
         db.query(Workout)
         .filter(
             Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
             Workout.date >= start_monday,
             Workout.date < end_date,
         )
@@ -785,6 +807,7 @@ def get_muscle_volume(
         db.query(Workout)
         .filter(
             Workout.user_id == current_user.id,
+            Workout.completed_at.is_not(None),
             Workout.date >= combined_start,
             Workout.date < end_date,
         )
@@ -835,4 +858,3 @@ def get_muscle_volume(
 
     items.sort(key=lambda x: x.total_volume_kg, reverse=True)
     return MuscleVolumeListResponse(period_label=period_label, items=items)
-

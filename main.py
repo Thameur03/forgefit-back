@@ -1,6 +1,9 @@
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +35,8 @@ import models.food_filter
 import models.schedule
 import models.analytics_event
 import models.account_deletion
+import models.admin_audit
+import models.operational_event
 import logging
 
 from limiter import limiter
@@ -43,6 +48,7 @@ from config import (
     parse_cors_origins,
     require_email_verification,
 )
+from services.operational_counters import increment as increment_counter
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +80,115 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+async def handle_rate_limit(request: Request, exc: RateLimitExceeded):
+    if request.url.path.startswith("/analytics/"):
+        increment_counter("analytics_ingest_rejected")
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, handle_rate_limit)
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation(request: Request, exc: RequestValidationError):
+    if request.url.path in {
+        "/analytics/events",
+        "/analytics/events/public",
+        "/analytics/identity/link",
+    }:
+        increment_counter("analytics_ingest_rejected")
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(IntegrityError)
+async def handle_integrity_error(_: Request, __: IntegrityError):
+    """Never expose raw database constraint details to API clients."""
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "The requested change conflicts with existing data"},
+    )
+
+
+class AnalyticsPayloadLimitMiddleware:
+    """Bound analytics request bodies even when clients use chunked transfer."""
+
+    _paths = {
+        "/analytics/events",
+        "/analytics/events/public",
+        "/analytics/identity/link",
+    }
+    _max_bytes = 16 * 1024
+
+    def __init__(self, app):
+        self.app = app
+
+    async def _reject(self, scope, receive, send, status_code: int, detail: str):
+        increment_counter("analytics_ingest_rejected")
+        response = JSONResponse(status_code=status_code, content={"detail": detail})
+        await response(scope, receive, send)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("path") not in self._paths:
+            await self.app(scope, receive, send)
+            return
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                content_length = int(raw_length)
+            except ValueError:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    400,
+                    "Invalid Content-Length",
+                )
+                return
+            if content_length > self._max_bytes:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    413,
+                    "Analytics payload too large",
+                )
+                return
+
+        messages = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message.get("type") == "http.disconnect":
+                break
+            if message.get("type") != "http.request":
+                continue
+            received += len(message.get("body", b""))
+            if received > self._max_bytes:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    413,
+                    "Analytics payload too large",
+                )
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay_receive():
+            if messages:
+                return messages.pop(0)
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+
+app.add_middleware(AnalyticsPayloadLimitMiddleware)
 
 cors_origins = parse_cors_origins(app_env=APP_ENV)
 

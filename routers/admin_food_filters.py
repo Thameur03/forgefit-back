@@ -7,12 +7,14 @@ DELETE performs a **soft delete** (sets ``is_active = False``).
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth.utils import get_current_admin
 from database import get_db
 from models.food_filter import FoodFilter
 from models.user import User
+from services.admin_operations import add_admin_audit_event
 from schemas.food_filter import (
     FoodFilterCreate,
     FoodFilterResponse,
@@ -21,6 +23,17 @@ from schemas.food_filter import (
 )
 
 router = APIRouter()
+
+
+def _commit_or_conflict(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A food filter with that slug already exists",
+        ) from exc
 
 
 @router.get("/food-filters", response_model=List[FoodFilterResponse])
@@ -45,7 +58,7 @@ def list_food_filters(
 def create_food_filter(
     payload: FoodFilterCreate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_admin),
 ):
     slug = payload.slug or slugify(payload.name)
 
@@ -66,7 +79,22 @@ def create_food_filter(
         sort_order=payload.sort_order,
     )
     db.add(food_filter)
-    db.commit()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A food filter with that slug already exists",
+        ) from exc
+    add_admin_audit_event(
+        db,
+        admin=admin,
+        action="food_filter.created",
+        target_type="food_filter",
+        target_id=food_filter.id,
+    )
+    _commit_or_conflict(db)
     db.refresh(food_filter)
     return food_filter
 
@@ -91,7 +119,7 @@ def update_food_filter(
     filter_id: int,
     payload: FoodFilterUpdate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_admin),
 ):
     food_filter = db.query(FoodFilter).filter(FoodFilter.id == filter_id).first()
     if not food_filter:
@@ -132,7 +160,16 @@ def update_food_filter(
     for key, value in update_data.items():
         setattr(food_filter, key, value)
 
-    db.commit()
+    add_admin_audit_event(
+        db,
+        admin=admin,
+        action="food_filter.updated",
+        target_type="food_filter",
+        target_id=food_filter.id,
+        metadata={"field_count": len(update_data)},
+    )
+
+    _commit_or_conflict(db)
     db.refresh(food_filter)
     return food_filter
 
@@ -141,7 +178,7 @@ def update_food_filter(
 def deactivate_food_filter(
     filter_id: int,
     db: Session = Depends(get_db),
-    _admin: User = Depends(get_current_admin),
+    admin: User = Depends(get_current_admin),
 ):
     """Soft-delete: sets ``is_active = False`` instead of removing the row."""
     food_filter = db.query(FoodFilter).filter(FoodFilter.id == filter_id).first()
@@ -151,5 +188,12 @@ def deactivate_food_filter(
             detail="Food filter not found",
         )
     food_filter.is_active = False
-    db.commit()
+    add_admin_audit_event(
+        db,
+        admin=admin,
+        action="food_filter.deactivated",
+        target_type="food_filter",
+        target_id=food_filter.id,
+    )
+    _commit_or_conflict(db)
     return {"message": "Food filter deactivated"}

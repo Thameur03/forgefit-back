@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, Text
+from sqlalchemy import Boolean, Column, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy import DateTime
@@ -54,7 +54,11 @@ class Micronutrient(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    food_links = relationship("FoodMicronutrient", back_populates="micronutrient")
+    food_links = relationship(
+        "FoodMicronutrient",
+        back_populates="micronutrient",
+        cascade="all, delete-orphan",
+    )
 
 
 class FoodMicronutrient(Base):
@@ -68,3 +72,12 @@ class FoodMicronutrient(Base):
 
     food = relationship("Food", back_populates="micronutrients")
     micronutrient = relationship("Micronutrient", back_populates="food_links")
+
+    __table_args__ = (
+        Index(
+            "ux_food_micronutrients_food_nutrient",
+            "food_id",
+            "micronutrient_id",
+            unique=True,
+        ),
+    )
