@@ -1,7 +1,6 @@
 from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from database import get_db
 from auth.utils import get_current_user
 from models.user import User
@@ -10,7 +9,6 @@ from models.program import Program, ProgramDay
 from schemas.schedule import (
     ScheduledWorkoutCreate,
     ScheduledWorkoutResponse,
-    ScheduledDateInfo,
 )
 from schemas.program import ProgramExerciseSchema
 
@@ -38,6 +36,9 @@ def _build_response(sw: ScheduledWorkout) -> ScheduledWorkoutResponse:
             )
             for ex in sw.program_day.exercises
         ],
+        status=sw.status,
+        completed_at=sw.completed_at,
+        linkage_trustworthy=sw.linkage_trustworthy,
     )
 
 
@@ -63,22 +64,29 @@ def schedule_workout(
             detail="Program day does not belong to your active program",
         )
 
-    # Upsert: delete existing entry for same user+date, then insert
+    # Stable upsert: preserve identity so completed workouts retain an exact
+    # scheduled_workout_id link for program-execution analytics.
     existing = db.query(ScheduledWorkout).filter(
         ScheduledWorkout.user_id == current_user.id,
         ScheduledWorkout.scheduled_date == body.scheduled_date,
     ).first()
     if existing:
-        db.delete(existing)
-        db.flush()
-
-    sw = ScheduledWorkout(
-        user_id=current_user.id,
-        program_id=program.id,
-        program_day_id=body.program_day_id,
-        scheduled_date=body.scheduled_date,
-    )
-    db.add(sw)
+        existing.program_id = program.id
+        existing.program_day_id = body.program_day_id
+        existing.status = "planned"
+        existing.completed_at = None
+        existing.linkage_trustworthy = True
+        sw = existing
+    else:
+        sw = ScheduledWorkout(
+            user_id=current_user.id,
+            program_id=program.id,
+            program_day_id=body.program_day_id,
+            scheduled_date=body.scheduled_date,
+            status="planned",
+            linkage_trustworthy=True,
+        )
+        db.add(sw)
     db.commit()
     db.refresh(sw)
     return _build_response(sw)
@@ -93,6 +101,7 @@ def get_today_scheduled(
     sw = db.query(ScheduledWorkout).filter(
         ScheduledWorkout.user_id == current_user.id,
         ScheduledWorkout.scheduled_date == today,
+        ScheduledWorkout.status != "cancelled",
     ).first()
     if not sw:
         raise HTTPException(status_code=404, detail="No scheduled workout for today")
@@ -113,6 +122,7 @@ def get_scheduled_for_date(
     sw = db.query(ScheduledWorkout).filter(
         ScheduledWorkout.user_id == current_user.id,
         ScheduledWorkout.scheduled_date == target,
+        ScheduledWorkout.status != "cancelled",
     ).first()
     if not sw:
         raise HTTPException(status_code=404, detail="No scheduled workout for this date")
@@ -131,6 +141,7 @@ def get_scheduled_for_month(
         ScheduledWorkout.user_id == current_user.id,
         extract("year", ScheduledWorkout.scheduled_date) == year,
         extract("month", ScheduledWorkout.scheduled_date) == month,
+        ScheduledWorkout.status != "cancelled",
     ).all()
     return [_build_response(r) for r in rows]
 
@@ -147,5 +158,8 @@ def delete_scheduled_workout(
     ).first()
     if not sw:
         raise HTTPException(status_code=404, detail="Scheduled workout not found")
-    db.delete(sw)
+    # Preserve cancellation history while excluding it from eligible planned
+    # opportunities. Hard deletion would silently change old denominators.
+    sw.status = "cancelled"
+    sw.completed_at = None
     db.commit()

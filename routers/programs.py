@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -630,6 +631,7 @@ def activate_program(
         {Program.is_active: False}
     )
     program.is_active = True
+    program.activated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(program)
     return program

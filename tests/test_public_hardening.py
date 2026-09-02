@@ -30,7 +30,7 @@ def test_public_pages_are_unauthenticated_branded_and_safe():
     privacy = client.get("/privacy")
     deletion = client.get("/delete-account")
     assert privacy.status_code == deletion.status_code == 200
-    assert "Jugurtha Fit Privacy Policy" in privacy.text
+    assert "DAUNTRA Privacy Policy" in privacy.text
     assert "Knowing an email address alone can never delete" in deletion.text
     assert deletion.headers["cache-control"] == "no-store"
     assert "frame-ancestors 'none'" in privacy.headers["content-security-policy"]
@@ -144,7 +144,7 @@ def test_production_cors_parsing_trims_and_deduplicates():
 def test_production_smtp_requires_encrypted_transport(monkeypatch):
     monkeypatch.setattr(email_service, "MAIL_USERNAME", "sender@example.com")
     monkeypatch.setattr(email_service, "MAIL_PASSWORD", "configured-password")
-    monkeypatch.setattr(email_service, "MAIL_FROM", "Jugurtha Fit <sender@example.com>")
+    monkeypatch.setattr(email_service, "MAIL_FROM", "DAUNTRA <sender@example.com>")
     monkeypatch.setattr(email_service, "MAIL_STARTTLS", False)
     monkeypatch.setattr(email_service, "MAIL_SSL_TLS", False)
     monkeypatch.setattr(email_service, "is_production", lambda: True)

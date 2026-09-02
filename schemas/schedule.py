@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel
 from schemas.program import ProgramExerciseSchema
@@ -18,6 +18,9 @@ class ScheduledWorkoutResponse(BaseModel):
     day_name: str
     program_name: str
     exercises: list[ProgramExerciseSchema]
+    status: str
+    completed_at: Optional[datetime] = None
+    linkage_trustworthy: bool
 
     class Config:
         from_attributes = True

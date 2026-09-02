@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey
+from sqlalchemy import Column, DateTime, Integer, String, Float, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -11,6 +11,7 @@ class Program(Base):
     weeks = Column(Integer, nullable=True)
     days_per_week = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=False, nullable=False, server_default="false")
+    activated_at = Column(DateTime(timezone=True), nullable=True)
     source_template = Column(String(100), nullable=True)  # e.g. "push_pull_legs"
     days = relationship(
         "ProgramDay",

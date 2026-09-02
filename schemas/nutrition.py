@@ -1,5 +1,5 @@
 from enum import Enum
-from datetime import date as _Date
+from datetime import date as _Date, datetime
 from typing import Optional, List, Dict
 
 from pydantic import BaseModel, Field
@@ -57,3 +57,26 @@ class DailySummary(BaseModel):
     total_fat_g: float = 0.0
     logs: List[NutritionLogResponse] = []
     meals: Dict[str, List[NutritionLogResponse]] = {}
+    is_complete: bool = False
+    completed_at: Optional[datetime] = None
+
+
+class NutritionDayCompletionUpdate(BaseModel):
+    is_complete: bool
+
+
+class NutritionDayCompletionResponse(BaseModel):
+    date: _Date
+    is_complete: bool
+    completed_at: Optional[datetime] = None
+
+
+class NutritionTargetsUpdate(BaseModel):
+    calorie_target: Optional[float] = Field(default=None, ge=500, le=10000)
+    protein_target_g: Optional[float] = Field(default=None, ge=0, le=1000)
+    carbs_target_g: Optional[float] = Field(default=None, ge=0, le=1500)
+    fat_target_g: Optional[float] = Field(default=None, ge=0, le=500)
+
+
+class NutritionTargetsResponse(NutritionTargetsUpdate):
+    configured: bool

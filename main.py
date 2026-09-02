@@ -37,6 +37,7 @@ import models.analytics_event
 import models.account_deletion
 import models.admin_audit
 import models.operational_event
+import models.lab_insights
 import logging
 
 from limiter import limiter

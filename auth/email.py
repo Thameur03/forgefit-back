@@ -1,4 +1,4 @@
-"""Jugurtha Fit transactional email delivery.
+"""DAUNTRA transactional email delivery.
 
 Resend's HTTPS API is preferred. SMTP remains an optional fallback. Real
 credentials are environment-only and are never included in diagnostics.

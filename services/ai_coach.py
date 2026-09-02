@@ -9,6 +9,8 @@ from models.user import User
 from models.workout import Workout, WorkoutSet
 from models.program import Program
 from models.nutrition import NutritionLog
+from models.nutrition import NutritionDayStatus
+from models.schedule import ScheduledWorkout
 from schemas.ai_coach import (
     AICoachRecommendation,
     AICoachWarning,
@@ -281,8 +283,16 @@ class AICoachEngine:
                 if features["adherence_percent"] is not None
                 else None
             ),
-            average_daily_calories=round(features["average_daily_calories"], 1),
-            average_daily_protein_g=round(features["average_daily_protein_g"], 1),
+            average_daily_calories=(
+                round(features["average_daily_calories"], 1)
+                if features["average_daily_calories"] is not None
+                else None
+            ),
+            average_daily_protein_g=(
+                round(features["average_daily_protein_g"], 1)
+                if features["average_daily_protein_g"] is not None
+                else None
+            ),
             protein_per_kg=(
                 round(features["protein_per_kg"], 2)
                 if features["protein_per_kg"] is not None
@@ -305,6 +315,7 @@ class AICoachEngine:
             self.db.query(Workout)
             .filter(
                 Workout.user_id == self.user.id,
+                Workout.completed_at.is_not(None),
                 Workout.date >= start,
                 Workout.date <= end,
             )
@@ -324,8 +335,14 @@ class AICoachEngine:
     def _query_nutrition(self, start: date, end: date) -> list:
         return (
             self.db.query(NutritionLog)
+            .join(
+                NutritionDayStatus,
+                (NutritionDayStatus.user_id == NutritionLog.user_id)
+                & (NutritionDayStatus.date == NutritionLog.date),
+            )
             .filter(
                 NutritionLog.user_id == self.user.id,
+                NutritionDayStatus.is_complete.is_(True),
                 NutritionLog.date >= start,
                 NutritionLog.date <= end,
             )
@@ -374,10 +391,8 @@ class AICoachEngine:
                 / previous_weekly_volume_kg
                 * 100
             )
-        elif weekly_volume_kg > 0:
-            # Previous period had zero volume → treat as major spike
-            volume_change_percent = 999.0
         else:
+            # A zero or unavailable denominator is not a comparison baseline.
             volume_change_percent = None
 
         # Muscle distribution
@@ -408,11 +423,34 @@ class AICoachEngine:
 
         # Active program adherence
         adherence_percent: Optional[float] = None
-        if active_program and active_program.days_per_week:
-            adherence_percent = min(
-                (workouts_this_period / active_program.days_per_week) * 100,
-                100.0,
+        if active_program:
+            period_start = date.today() - timedelta(days=self.days - 1)
+            opportunities = (
+                self.db.query(ScheduledWorkout)
+                .filter(
+                    ScheduledWorkout.user_id == self.user.id,
+                    ScheduledWorkout.program_id == active_program.id,
+                    ScheduledWorkout.scheduled_date >= period_start,
+                    ScheduledWorkout.scheduled_date <= date.today(),
+                    ScheduledWorkout.linkage_trustworthy.is_(True),
+                    ScheduledWorkout.status.in_(("planned", "completed")),
+                )
+                .all()
             )
+            if opportunities:
+                completed_schedule_ids = {
+                    workout.scheduled_workout_id
+                    for workout in current_workouts
+                    if workout.scheduled_workout_id is not None
+                }
+                matched = sum(
+                    opportunity.id in completed_schedule_ids
+                    or opportunity.status == "completed"
+                    for opportunity in opportunities
+                )
+                adherence_percent = matched / len(opportunities) * 100
+            else:
+                missing_data.append("trusted_program_schedule")
         else:
             missing_data.append("active_program")
 
@@ -422,11 +460,20 @@ class AICoachEngine:
 
         # Group by date for daily aggregates
         daily_nutrition: dict[date, dict] = defaultdict(
-            lambda: {"calories": 0.0, "protein": 0.0, "carbs": 0.0, "fat": 0.0}
+            lambda: {
+                "calories": 0.0,
+                "protein": 0.0,
+                "protein_known": True,
+                "carbs": 0.0,
+                "fat": 0.0,
+            }
         )
         for log in nutrition_logs:
             daily_nutrition[log.date]["calories"] += float(log.calories or 0)
-            daily_nutrition[log.date]["protein"] += float(log.protein_g or 0)
+            if log.protein_g is None:
+                daily_nutrition[log.date]["protein_known"] = False
+            else:
+                daily_nutrition[log.date]["protein"] += float(log.protein_g)
             daily_nutrition[log.date]["carbs"] += float(log.carbs_g or 0)
             daily_nutrition[log.date]["fat"] += float(log.fat_g or 0)
 
@@ -435,21 +482,26 @@ class AICoachEngine:
 
         if logged_days > 0:
             total_cal = sum(d["calories"] for d in daily_nutrition.values())
-            total_pro = sum(d["protein"] for d in daily_nutrition.values())
             average_daily_calories = total_cal / logged_days
-            average_daily_protein_g = total_pro / logged_days
+            known_protein_days = [
+                d["protein"] for d in daily_nutrition.values() if d["protein_known"]
+            ]
+            average_daily_protein_g = (
+                sum(known_protein_days) / len(known_protein_days)
+                if len(known_protein_days) == logged_days
+                else None
+            )
         else:
-            average_daily_calories = 0.0
-            average_daily_protein_g = 0.0
+            average_daily_calories = None
+            average_daily_protein_g = None
 
         # Protein per kg
+        # V1's universal protein-per-kg judgement is retired. V2 compares only
+        # explicitly complete days with the user's configured target.
         weight = getattr(self.user, "weight_kg", None)
-        if weight and weight > 0:
-            protein_per_kg = average_daily_protein_g / weight
-        else:
-            protein_per_kg = None
-            if "bodyweight" not in missing_data:
-                missing_data.append("bodyweight")
+        protein_per_kg = None
+        if not weight or weight <= 0:
+            missing_data.append("bodyweight")
 
         # Calorie CV
         calorie_cv: Optional[float] = None
@@ -546,12 +598,13 @@ class AICoachEngine:
 
         # --- Nutrition deductions (v2 — stronger tiers) ---
         lcp = f["logging_consistency_percent"]
-        if lcp < 50:
-            nutrition -= 10
-            breakdown.low_logging_deduction = 10.0
-        elif lcp < 80:
-            nutrition -= 5
-            breakdown.low_logging_deduction = 5.0
+        if f["logged_days"] > 0:
+            if lcp < 50:
+                nutrition -= 10
+                breakdown.low_logging_deduction = 10.0
+            elif lcp < 80:
+                nutrition -= 5
+                breakdown.low_logging_deduction = 5.0
 
         ppkg = f["protein_per_kg"]
         if ppkg is not None:
@@ -649,7 +702,7 @@ class AICoachEngine:
                 warn_detail = (
                     f"Your total workout volume increased by {round(vcp, 1)}% "
                     f"compared with the previous period. Avoid adding more sets "
-                    f"until recovery is stable."
+                    f"until more comparable training history is available."
                 )
             elif vcp > 25:
                 warn_priority = "high"
@@ -679,7 +732,7 @@ class AICoachEngine:
                 reason=f"Your total training volume increased by {round(vcp, 1)}%.",
                 action="Keep your next session moderate and avoid adding extra sets.",
                 priority="high" if rec_impact >= 8 else "medium",
-                category="recovery",
+                category="workout",
                 impact=rec_impact,
                 metric="volume_change_percent",
             ))
@@ -707,10 +760,10 @@ class AICoachEngine:
         if ppkg is not None and ppkg < 1.6:
             if ppkg < 1.0:
                 recs.append(AICoachRecommendation(
-                    title="Increase protein intake urgently",
+                    title="Compare protein with your configured target",
                     reason=(
                         f"Your average protein intake is {round(ppkg, 2)} g/kg, "
-                        f"well below the minimum for strength training."
+                        f"below the reference used by this legacy endpoint."
                     ),
                     action="Add two high-protein meals or snacks today.",
                     priority="high",
@@ -736,7 +789,7 @@ class AICoachEngine:
                     title="Increase protein intake",
                     reason=(
                         f"Your average protein intake is {round(ppkg, 2)} g/kg, "
-                        f"slightly below the optimal range."
+                        f"below the reference used by this legacy endpoint."
                     ),
                     action="Add one high-protein meal or snack today.",
                     priority="medium",
@@ -787,7 +840,7 @@ class AICoachEngine:
                 metric="calorie_variability",
             ))
 
-        # -- Poor recovery nutrition --
+        # -- Legacy cross-domain nutrition comparison --
         if (
             vcp is not None
             and vcp > 25
@@ -795,19 +848,19 @@ class AICoachEngine:
             and ppkg < 1.6
         ):
             warns.append(AICoachWarning(
-                code="recovery_support_low",
+                code="legacy_cross_domain_low",
                 title="Recovery support may be low",
                 detail="Training volume increased while protein intake is below target.",
                 priority="high",
             ))
             recs.append(AICoachRecommendation(
-                title="Support recovery with protein",
+                title="Review your configured protein target",
                 reason="Higher training load requires better nutrition support.",
                 action="Add a protein-rich meal after your next workout.",
                 priority="high",
-                category="recovery",
+                category="nutrition",
                 impact=9,
-                metric="recovery_nutrition",
+                metric="configured_nutrition_target",
             ))
 
         return recs, warns
@@ -902,7 +955,7 @@ class AICoachEngine:
             return (
                 f"Nutrition information was logged on {ld} day"
                 f"{'s' if ld != 1 else ''}, but no completed workouts were "
-                "found during this period. Training and overall-readiness "
+                "found during this period. Cross-domain training analysis "
                 "conclusions are not yet reliable."
             )
 
@@ -918,7 +971,7 @@ class AICoachEngine:
             "Excellent": (
                 "Your training consistency and nutrition coverage were both "
                 "strong this week. Based on your recorded sessions, "
-                "recovery load appears well managed."
+                "recorded workload change is within this legacy comparison range."
             ),
             "Good": (
                 "Your week is performing well overall, with a few areas for "

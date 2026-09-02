@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db
 from models.user import User
 from models.workout import Workout, WorkoutSet
+from models.program import Program, ProgramDay
+from models.schedule import ScheduledWorkout
 from schemas.workout import (
     WorkoutCreate,
     WorkoutUpdate,
@@ -162,7 +164,69 @@ def _build_workout_response(db: Session, workout: Workout, user: User) -> dict:
         "total_volume_kg": total_volume_kg,
         "client_request_id": workout.client_request_id,
         "completed_at": workout.completed_at,
+        "program_id": workout.program_id,
+        "program_day_id": workout.program_day_id,
+        "scheduled_workout_id": workout.scheduled_workout_id,
     }
+
+
+def _resolve_workout_links(
+    db: Session,
+    user_id: int,
+    data: WorkoutCreate,
+) -> tuple[int | None, int | None, int | None]:
+    """Validate and normalize optional program-origin links.
+
+    Legacy clients can omit all fields. New clients must never be allowed to
+    attach a workout to another user's program or schedule.
+    """
+    program_id = data.program_id
+    program_day_id = data.program_day_id
+    scheduled_id = data.scheduled_workout_id
+
+    if scheduled_id is not None:
+        scheduled = (
+            db.query(ScheduledWorkout)
+            .filter(
+                ScheduledWorkout.id == scheduled_id,
+                ScheduledWorkout.user_id == user_id,
+            )
+            .first()
+        )
+        if scheduled is None or scheduled.status == "cancelled":
+            raise HTTPException(status_code=422, detail="Scheduled workout link is invalid")
+        if program_id is not None and program_id != scheduled.program_id:
+            raise HTTPException(status_code=422, detail="Program link does not match schedule")
+        if program_day_id is not None and program_day_id != scheduled.program_day_id:
+            raise HTTPException(status_code=422, detail="Program day link does not match schedule")
+        already_linked = (
+            db.query(Workout.id)
+            .filter(Workout.scheduled_workout_id == scheduled_id)
+            .first()
+        )
+        if already_linked is not None:
+            raise HTTPException(status_code=409, detail="Scheduled workout is already linked")
+        program_id = scheduled.program_id
+        program_day_id = scheduled.program_day_id
+
+    if program_day_id is not None:
+        day = db.query(ProgramDay).filter(ProgramDay.id == program_day_id).first()
+        if day is None:
+            raise HTTPException(status_code=422, detail="Program day link is invalid")
+        if program_id is not None and day.program_id != program_id:
+            raise HTTPException(status_code=422, detail="Program day does not match program")
+        program_id = day.program_id
+
+    if program_id is not None:
+        program = (
+            db.query(Program)
+            .filter(Program.id == program_id, Program.user_id == user_id)
+            .first()
+        )
+        if program is None:
+            raise HTTPException(status_code=422, detail="Program link is invalid")
+
+    return program_id, program_day_id, scheduled_id
 
 
 def _workout_json_response(payload: dict, http_status: int):
@@ -238,6 +302,10 @@ def create_workout(
                 status.HTTP_200_OK,
             )
 
+    program_id, program_day_id, scheduled_workout_id = _resolve_workout_links(
+        db, current_user.id, data
+    )
+
     # ── Insert new workout ────────────────────────────────────────────────────
     workout = Workout(
         user_id=current_user.id,
@@ -246,6 +314,9 @@ def create_workout(
         name=data.name,
         duration_seconds=data.duration_seconds,
         client_request_id=data.client_request_id,
+        program_id=program_id,
+        program_day_id=program_day_id,
+        scheduled_workout_id=scheduled_workout_id,
     )
     try:
         db.add(workout)
@@ -319,6 +390,7 @@ def add_set(
     return WorkoutSetResponse(
         id=workout_set.id,
         exercise_name=workout_set.exercise_name,
+        exercise_id=workout_set.exercise_id,
         sets=workout_set.sets,
         reps=workout_set.reps,
         weight_kg=workout_set.weight_kg,
@@ -372,6 +444,10 @@ def list_workouts(
                 "exercise_count": len(exercise_names),
                 "exercise_names": exercise_names,
                 "completed_at": w.completed_at,
+                "client_request_id": w.client_request_id,
+                "program_id": w.program_id,
+                "program_day_id": w.program_day_id,
+                "scheduled_workout_id": w.scheduled_workout_id,
             }
         )
     return summaries
@@ -447,6 +523,20 @@ def update_workout(
         # predates the explicit completed=true contract.
         workout.completed_at = datetime.now(timezone.utc)
         workout.completion_inferred = True
+
+    if workout.completed_at is not None and workout.scheduled_workout_id is not None:
+        scheduled = (
+            db.query(ScheduledWorkout)
+            .filter(
+                ScheduledWorkout.id == workout.scheduled_workout_id,
+                ScheduledWorkout.user_id == current_user.id,
+            )
+            .first()
+        )
+        if scheduled is not None:
+            scheduled.status = "completed"
+            scheduled.completed_at = workout.completed_at
+            scheduled.linkage_trustworthy = True
 
     db.commit()
     db.refresh(workout)

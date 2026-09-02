@@ -856,7 +856,14 @@ def feature_adoption(db: Session, value: DateRange) -> dict[str, Any]:
         "statistics": _event_users(db, value, {"stats_viewed"}),
         "personal_records": _event_users(db, value, {"personal_record_achieved"}),
         "lab_insights": _event_users(
-            db, value, {"lab_insights_viewed", "lab_insight_generated"}
+            db,
+            value,
+            {
+                "lab_insights_viewed",
+                "insight_refreshed",
+                "insight_impression",
+                "lab_insight_generated",
+            },
         ),
     }
     labels = {
@@ -1174,11 +1181,10 @@ def scheduling_analytics(db: Session, value: DateRange) -> dict[str, Any]:
 
 
 def insights_analytics(db: Session, value: DateRange) -> dict[str, Any]:
-    cutoff = value.end_at - timedelta(days=7)
     eligible_ids = {
         row[0]
         for row in db.query(User.id)
-        .filter(User.role == "user", User.created_at <= cutoff)
+        .filter(User.role == "user", User.created_at < value.end_at)
         .all()
     }
     history_ids = {
@@ -1206,14 +1212,30 @@ def insights_analytics(db: Session, value: DateRange) -> dict[str, Any]:
     rows = _event_rows(
         db,
         value,
-        {"lab_insights_viewed", "lab_insight_generated", "recommendation_interacted"},
+        {
+            "lab_insights_viewed",
+            "insight_refreshed",
+            "insight_impression",
+            "insight_opened",
+            "evidence_expanded",
+            "action_opened",
+            "generation_failed",
+            "lab_insight_generated",
+            "recommendation_interacted",
+        },
     )
     views = [row for row in rows if row.event_name == "lab_insights_viewed"]
     viewers = {row.user_id for row in views if row.user_id is not None}
     generated = [row for row in rows if row.event_name == "lab_insight_generated"]
+    refreshed = [row for row in rows if row.event_name == "insight_refreshed"]
+    impressions = [row for row in rows if row.event_name == "insight_impression"]
+    opened = [row for row in rows if row.event_name == "insight_opened"]
+    evidence_expanded = [row for row in rows if row.event_name == "evidence_expanded"]
+    action_opened = [row for row in rows if row.event_name == "action_opened"]
+    failed = [row for row in rows if row.event_name == "generation_failed"]
     categories: Counter[str] = Counter()
-    for row in generated:
-        category = (row.properties or {}).get("insight_category")
+    for row in impressions:
+        category = (row.properties or {}).get("detector_id")
         if isinstance(category, str) and _SAFE_STRUCTURED_LABEL.fullmatch(category):
             categories[category] += 1
     return {
@@ -1224,16 +1246,25 @@ def insights_analytics(db: Session, value: DateRange) -> dict[str, Any]:
         "lab_insights_users": len(viewers),
         "lab_insights_views": len(views),
         "insights_generated": len(generated),
+        "insights_refreshed": len(refreshed),
+        "insight_impressions": len(impressions),
+        "insight_opens": len(opened),
+        "evidence_expansions": len(evidence_expanded),
+        "action_opens": len(action_opened),
+        "generation_failures": len(failed),
         "average_views_per_viewer": round(len(views) / len(viewers), 2) if viewers else 0.0,
-        "recommendation_interactions": sum(1 for row in rows if row.event_name == "recommendation_interacted"),
+        "recommendation_interactions": len(opened) + len(action_opened) + sum(
+            1 for row in rows if row.event_name == "recommendation_interacted"
+        ),
         "common_categories": [
             {"key": key, "label": key, "count": count}
             for key, count in categories.most_common(10)
         ],
         "data_quality": [
-            "Eligibility matches the current seven-calendar-day product gate.",
-            "Core-history readiness means at least one persisted workout or nutrition entry; the AI engine may require richer data.",
-            "No recommendation text or raw AI output is aggregated.",
+            "Lab V2 is available immediately; domain confidence is determined per finding.",
+            "Core history means at least one completed workout or nutrition entry; complete-day coverage is reported separately in Lab.",
+            "Legacy generated counts are retained only for old clients; refresh, impression, open, evidence, action, and failure events use V2 semantics.",
+            "No recommendation text, evidence values, or raw health data is aggregated.",
         ],
     }
 

@@ -86,8 +86,8 @@ class AICoachSummaryResponse(BaseModel):
     active_program_days_per_week: Optional[int] = None
     adherence_percent: Optional[float] = None
 
-    average_daily_calories: float = 0.0
-    average_daily_protein_g: float = 0.0
+    average_daily_calories: Optional[float] = None
+    average_daily_protein_g: Optional[float] = None
     protein_per_kg: Optional[float] = None
     nutrition_logging_consistency_percent: float = 0.0
     calorie_coefficient_of_variation: Optional[float] = None

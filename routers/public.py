@@ -44,8 +44,8 @@ def _support_html() -> str:
     website = os.getenv("PUBLIC_WEB_URL", "").strip()
     if website.startswith("https://"):
         safe_url = html.escape(website.rstrip("/"), quote=True)
-        return f'<a href="{safe_url}">the official Jugurtha Fit website</a>'
-    return "the support contact in the official Jugurtha Fit store listing"
+        return f'<a href="{safe_url}">the official DAUNTRA website</a>'
+    return "the support contact in the official DAUNTRA store listing"
 
 
 def _page(title: str, body: str, script: str = "") -> HTMLResponse:
@@ -69,7 +69,7 @@ def _page(title: str, body: str, script: str = "") -> HTMLResponse:
 def privacy_policy() -> HTMLResponse:
     support = _support_html()
     body = f"""<article class="card"><p class="meta">Last updated: August 27, 2026</p>
-<h1>Jugurtha Fit Privacy Policy</h1><p>This policy covers the Jugurtha Fit mobile app,
+<h1>DAUNTRA Privacy Policy</h1><p>This policy covers the DAUNTRA mobile app,
 website, API, and supporting services.</p><h2>Information you provide</h2><ul>
 <li><strong>Account/profile:</strong> full name, email, one-way password hash, and optional
 date of birth, gender, weight, height, and fitness level.</li><li><strong>Workout:</strong>
@@ -87,7 +87,7 @@ sent, and session replay is disabled. If configured, Sentry receives crash/perfo
 and limited activity breadcrumbs such as event names and coarse counts or ranges; raw workout,
 nutrition, profile, and authentication values are excluded. Default PII, screenshots, and replay
 are disabled.</p><h2>Camera</h2><p>Camera permission scans food
-barcodes with Google ML Kit on-device. Jugurtha Fit does not retain or upload images or video.
+barcodes with Google ML Kit on-device. DAUNTRA does not retain or upload images or video.
 The detected barcode may be sent for a food lookup. ML Kit may collect limited SDK diagnostics,
 including app/device configuration, performance/usage metrics, and an installation identifier.</p>
 <h2>Service providers</h2><ul><li><strong>Render</strong> hosts the API/database and processes
@@ -103,7 +103,7 @@ performance data; website PostHog is opt-in, captures selected interactions and 
 diagnostics when enabled, and keeps session recording disabled.</li></ul>
 <h2>Use and sharing</h2><p>Data provides authentication,
 fitness and nutrition tracking, programs, statistics, Lab Insights, security, support, and reliability.
-It is shared with processors only as needed for those functions. Jugurtha Fit does not sell personal
+It is shared with processors only as needed for those functions. DAUNTRA does not sell personal
 information.</p><h2>Deletion and retention</h2><p>Delete in Profile → Account → Delete
 Account or use the <a href="/delete-account">public deletion page</a>. The app hard-deletes the
 account/profile and associated schedules, programs/exercises, workouts/sets, nutrition history,
@@ -123,7 +123,7 @@ questions, contact {support}.</p></article>"""
 def delete_account_page() -> HTMLResponse:
     support = _support_html()
     body = f"""<section class="card"><p class="meta">Public account deletion</p>
-<h1>Delete your Jugurtha Fit account</h1><div class="notice"><strong>This is permanent.</strong>
+<h1>Delete your DAUNTRA account</h1><div class="notice"><strong>This is permanent.</strong>
 Deletion removes your account/profile, workouts and sets, programs and schedules, nutrition history,
 statistics source data, account-linked app analytics, and session/revocation records.</div><p>Enter your account email.
 We return the same response whether an account exists. If it does, a six-digit code is emailed to you.

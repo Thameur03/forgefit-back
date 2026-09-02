@@ -25,6 +25,14 @@ class User(Base):
     weight_kg = Column(Float, nullable=True)
     height_cm = Column(Float, nullable=True)
     fitness_level = Column(String(20), nullable=True)
+    # Canonical Lab context. These fields are nullable by design: absence is
+    # evidence that the value is unknown, never a reason to invent a default.
+    timezone = Column(String(64), nullable=True)
+    canonical_goal = Column(String(64), nullable=True)
+    calorie_target = Column(Float, nullable=True)
+    protein_target_g = Column(Float, nullable=True)
+    carbs_target_g = Column(Float, nullable=True)
+    fat_target_g = Column(Float, nullable=True)
 
     # Admin / activity fields
     role = Column(String(20), nullable=False, default="user", server_default="user")

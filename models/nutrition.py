@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Float, Date, ForeignKey, UniqueConstraint
+from sqlalchemy.sql import func
 from database import Base
 
 class NutritionLog(Base):
@@ -18,3 +19,20 @@ class NutritionLog(Base):
     # Nullable: legacy rows (client_request_id IS NULL) are unaffected.
     # Uniqueness enforced by a partial PostgreSQL index — see migration 004.
     client_request_id = Column(String(36), nullable=True, index=False)
+
+
+class NutritionDayStatus(Base):
+    """Explicit user assertion that a local-calendar intake day is complete."""
+
+    __tablename__ = "nutrition_day_statuses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, nullable=False)
+    is_complete = Column(Boolean, nullable=False, default=False, server_default="false")
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "date", name="uq_nutrition_day_user_date"),
+    )

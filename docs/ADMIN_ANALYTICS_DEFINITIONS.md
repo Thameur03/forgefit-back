@@ -1,4 +1,4 @@
-# Jugurtha Fit admin analytics definitions
+# DAUNTRA admin analytics definitions
 
 This document is the contract for numbers shown in the production admin panel.
 The FastAPI database is the source of truth for core business analytics. PostHog

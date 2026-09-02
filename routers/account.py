@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _CHALLENGE_EXPIRY_MINUTES = 15
 _MAX_FAILED_ATTEMPTS = 5
 _REQUEST_MESSAGE = (
-    "If that email belongs to a Jugurtha Fit account, a confirmation code has been sent."
+    "If that email belongs to a DAUNTRA account, a confirmation code has been sent."
 )
 _INVALID_MESSAGE = "Invalid or expired deletion code"
 
@@ -40,13 +40,16 @@ _INVALID_MESSAGE = "Invalid or expired deletion code"
 def _delete_user_owned_records(db: Session, user: User) -> None:
     """Stage complete current-schema deletion; the caller owns the transaction."""
     user_id = user.id
+    # Workouts now carry nullable program/schedule provenance links. Delete
+    # dependent workouts before their referenced schedule/program rows.
+    for workout in db.query(Workout).filter(Workout.user_id == user_id).all():
+        db.delete(workout)
+    db.flush()
     db.query(ScheduledWorkout).filter(ScheduledWorkout.user_id == user_id).delete(
         synchronize_session=False
     )
     for program in db.query(Program).filter(Program.user_id == user_id).all():
         db.delete(program)
-    for workout in db.query(Workout).filter(Workout.user_id == user_id).all():
-        db.delete(workout)
     db.query(NutritionLog).filter(NutritionLog.user_id == user_id).delete(
         synchronize_session=False
     )

@@ -23,6 +23,11 @@ class Workout(Base):
     # Uniqueness enforced by a partial PostgreSQL index (user_id, client_request_id)
     # WHERE client_request_id IS NOT NULL — see Alembic migration 003.
     client_request_id = Column(String(36), nullable=True, index=False)
+    program_id = Column(Integer, ForeignKey("programs.id"), nullable=True)
+    program_day_id = Column(Integer, ForeignKey("program_days.id"), nullable=True)
+    scheduled_workout_id = Column(
+        Integer, ForeignKey("scheduled_workouts.id"), nullable=True
+    )
 
     sets = relationship(
         "WorkoutSet", back_populates="workout", cascade="all, delete-orphan"

@@ -25,9 +25,10 @@ LEGACY_EVENT_ALIASES: dict[str, str] = {
     "nutrition_tab_viewed": "nutrition_viewed",
     "programs_viewed": "program_viewed",
     "program_day_viewed": "program_viewed",
-    "lab_insights_loaded": "lab_insight_generated",
+    "lab_insights_loaded": "insight_refreshed",
+    "lab_insights_failed": "generation_failed",
     "recommendation_card_viewed": "recommendation_interacted",
-    "next_action_viewed": "recommendation_interacted",
+    "next_action_viewed": "action_opened",
 }
 
 
@@ -86,8 +87,15 @@ EVENT_CATEGORIES: dict[str, str] = {
     # Stats / insights
     "stats_viewed": "insights",
     "lab_insights_viewed": "insights",
+    "insight_impression": "insights",
+    "insight_opened": "insights",
+    "evidence_expanded": "insights",
+    "action_opened": "insights",
+    "insight_refreshed": "insights",
+    "generation_failed": "insights",
+    # Legacy canonical names remain accepted for released clients, but V2 does
+    # not emit them and admin reporting keeps them explicitly separate.
     "lab_insight_generated": "insights",
-    "lab_insights_failed": "insights",
     "recommendation_interacted": "insights",
 }
 
@@ -129,7 +137,7 @@ FAILURE_EVENT_NAMES = frozenset(
         "login_failed",
         "workout_save_failed",
         "meal_log_failed",
-        "lab_insights_failed",
+        "generation_failed",
         "food_search_failed",
     }
 )
@@ -148,6 +156,8 @@ MEANINGFUL_ACTIVITY_EVENTS = frozenset(
         "scheduled_workout_completed",
         "scheduled_workout_cancelled",
         "personal_record_achieved",
+        "insight_opened",
+        "action_opened",
         "lab_insight_generated",
         "recommendation_interacted",
     }
@@ -194,7 +204,14 @@ EVENT_PROPERTY_ALLOWLIST: dict[str, frozenset[str]] = {
     "lab_insight_generated": frozenset(
         {"score_bucket", "has_warning", "insight_category"}
     ),
-    "lab_insights_failed": _COMMON_ERROR_PROPERTIES,
+    "insight_refreshed": frozenset({"cache_status"}),
+    "insight_impression": frozenset(
+        {"detector_id", "lifecycle", "confidence"}
+    ),
+    "insight_opened": frozenset({"detector_id"}),
+    "evidence_expanded": frozenset({"detector_id"}),
+    "action_opened": frozenset({"detector_id"}),
+    "generation_failed": _COMMON_ERROR_PROPERTIES,
     "recommendation_interacted": frozenset(
         {"score_bucket", "interaction", "insight_category"}
     ),

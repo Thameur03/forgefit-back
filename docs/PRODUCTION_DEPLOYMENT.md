@@ -1,4 +1,4 @@
-# Jugurtha Fit production deployment
+# DAUNTRA production deployment
 
 Never commit production values. Configure these as Render environment variables:
 
@@ -7,13 +7,13 @@ APP_ENV=production
 DATABASE_URL=[Render PostgreSQL connection string]
 SECRET_KEY=[at least 32 cryptographically random bytes]
 AUTO_CREATE_TABLES=false
-CORS_ORIGINS=https://[approved Jugurtha Fit website origin]
-PUBLIC_WEB_URL=https://[approved Jugurtha Fit website origin]
+CORS_ORIGINS=https://[approved DAUNTRA website origin]
+PUBLIC_WEB_URL=https://[approved DAUNTRA website origin]
 SUPPORT_EMAIL=[monitored support address]
 REQUIRE_EMAIL_VERIFICATION=true
 RESEND_API_KEY=[secret Render value]
-MAIL_FROM=Jugurtha Fit <noreply@[verified domain]>
-MAIL_FROM_NAME=Jugurtha Fit
+MAIL_FROM=DAUNTRA <noreply@[verified domain]>
+MAIL_FROM_NAME=DAUNTRA
 USDA_API_KEY=[secret]
 EXERCISEDB_URL=https://[approved ExerciseDB-compatible host]
 ```
@@ -45,7 +45,7 @@ not reset the database. Verify `/health` returns only `{"status":"ok"}`; verify
    record at the same hostname; merge it according to the DNS provider's rules
    if one exists.
 3. Wait until every required Resend record shows **Verified**.
-4. Create/use a sender such as `Jugurtha Fit <noreply@yourdomain.com>` and set
+4. Create/use a sender such as `DAUNTRA <noreply@yourdomain.com>` and set
    that complete value as `MAIL_FROM` in Render.
 5. Store a production-scoped Resend key as `RESEND_API_KEY` in Render. Never put
    it in `.env.example`, logs, screenshots, or Git.

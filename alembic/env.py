@@ -17,13 +17,14 @@ import database
 from models.user import User
 from models.workout import Workout, WorkoutSet
 from models.program import Program, ProgramDay, ProgramExercise
-from models.nutrition import NutritionLog
+from models.nutrition import NutritionDayStatus, NutritionLog
 from models.token import RevokedToken
 from models.schedule import ScheduledWorkout
 from models.analytics_event import AnalyticsEvent  # noqa: F401 — keep for autogenerate
 from models.account_deletion import AccountDeletionChallenge  # noqa: F401
 from models.admin_audit import AdminAuditEvent  # noqa: F401
 from models.operational_event import OperationalEvent  # noqa: F401
+from models.lab_insights import LabAnalysisSnapshot, LabInsightState  # noqa: F401
 
 target_metadata = database.Base.metadata
 

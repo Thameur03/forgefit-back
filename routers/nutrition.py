@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from collections import defaultdict
 import logging
 
@@ -8,11 +8,15 @@ from sqlalchemy import func
 
 from database import get_db
 from models.user import User
-from models.nutrition import NutritionLog
+from models.nutrition import NutritionDayStatus, NutritionLog
 from schemas.nutrition import (
     NutritionLogCreate,
     NutritionLogResponse,
     DailySummary,
+    NutritionDayCompletionResponse,
+    NutritionDayCompletionUpdate,
+    NutritionTargetsResponse,
+    NutritionTargetsUpdate,
 )
 from auth.utils import get_current_user
 
@@ -20,7 +24,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _build_daily_summary(target_date: date, logs: list[NutritionLog]) -> dict:
+def _build_daily_summary(
+    target_date: date,
+    logs: list[NutritionLog],
+    day_status: NutritionDayStatus | None = None,
+) -> dict:
     """Build a DailySummary dict from a list of NutritionLog objects."""
     total_calories = sum(log.calories for log in logs)
     total_protein = sum(log.protein_g or 0.0 for log in logs)
@@ -43,7 +51,20 @@ def _build_daily_summary(target_date: date, logs: list[NutritionLog]) -> dict:
         "total_fat_g": total_fat,
         "logs": log_responses,
         "meals": dict(meals),
+        "is_complete": bool(day_status and day_status.is_complete and logs),
+        "completed_at": day_status.completed_at if day_status and logs else None,
     }
+
+
+def _day_status(db: Session, user_id: int, target_date: date) -> NutritionDayStatus | None:
+    return (
+        db.query(NutritionDayStatus)
+        .filter(
+            NutritionDayStatus.user_id == user_id,
+            NutritionDayStatus.date == target_date,
+        )
+        .first()
+    )
 
 
 @router.post("/", response_model=NutritionLogResponse, status_code=status.HTTP_201_CREATED)
@@ -156,7 +177,7 @@ def get_today_summary(
         .all()
     )
     total_calories = sum(log.calories for log in logs)
-    return _build_daily_summary(today, logs)
+    return _build_daily_summary(today, logs, _day_status(db, current_user.id, today))
 
 
 @router.get("/history", response_model=list[DailySummary], status_code=status.HTTP_200_OK)
@@ -200,7 +221,16 @@ def get_nutrition_history(
     for log in all_logs:
         logs_by_date[log.date].append(log)
 
-    return [_build_daily_summary(d, logs_by_date[d]) for d in dates]
+    statuses = {
+        item.date: item
+        for item in db.query(NutritionDayStatus)
+        .filter(
+            NutritionDayStatus.user_id == current_user.id,
+            NutritionDayStatus.date.in_(dates),
+        )
+        .all()
+    }
+    return [_build_daily_summary(d, logs_by_date[d], statuses.get(d)) for d in dates]
 
 
 @router.get("/date/{target_date}", response_model=DailySummary, status_code=status.HTTP_200_OK)
@@ -220,7 +250,81 @@ def get_date_summary(
         .order_by(NutritionLog.id)
         .all()
     )
-    return _build_daily_summary(target_date, logs)
+    return _build_daily_summary(
+        target_date, logs, _day_status(db, current_user.id, target_date)
+    )
+
+
+@router.get("/targets", response_model=NutritionTargetsResponse)
+def get_nutrition_targets(
+    current_user: User = Depends(get_current_user),
+):
+    values = {
+        "calorie_target": current_user.calorie_target,
+        "protein_target_g": current_user.protein_target_g,
+        "carbs_target_g": current_user.carbs_target_g,
+        "fat_target_g": current_user.fat_target_g,
+    }
+    return {**values, "configured": any(value is not None for value in values.values())}
+
+
+@router.put("/targets", response_model=NutritionTargetsResponse)
+def update_nutrition_targets(
+    data: NutritionTargetsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    updates = data.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        setattr(current_user, key, value)
+    db.commit()
+    db.refresh(current_user)
+    values = {
+        "calorie_target": current_user.calorie_target,
+        "protein_target_g": current_user.protein_target_g,
+        "carbs_target_g": current_user.carbs_target_g,
+        "fat_target_g": current_user.fat_target_g,
+    }
+    return {**values, "configured": any(value is not None for value in values.values())}
+
+
+@router.put(
+    "/days/{target_date}/completion",
+    response_model=NutritionDayCompletionResponse,
+)
+def set_nutrition_day_completion(
+    target_date: date,
+    data: NutritionDayCompletionUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if target_date > date.today():
+        raise HTTPException(status_code=422, detail="A future day cannot be completed")
+    has_logs = (
+        db.query(NutritionLog.id)
+        .filter(
+            NutritionLog.user_id == current_user.id,
+            NutritionLog.date == target_date,
+        )
+        .first()
+        is not None
+    )
+    if data.is_complete and not has_logs:
+        raise HTTPException(
+            status_code=422,
+            detail="A nutrition day needs at least one log before it can be completed",
+        )
+    row = _day_status(db, current_user.id, target_date)
+    if row is None:
+        row = NutritionDayStatus(user_id=current_user.id, date=target_date)
+        db.add(row)
+    now = datetime.now(timezone.utc)
+    row.is_complete = data.is_complete
+    row.completed_at = now if data.is_complete else None
+    row.updated_at = now
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.put("/{log_id}", response_model=NutritionLogResponse, status_code=status.HTTP_200_OK)

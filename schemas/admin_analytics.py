@@ -200,6 +200,12 @@ class InsightsAnalyticsResponse(BaseModel):
     lab_insights_users: int
     lab_insights_views: int
     insights_generated: int
+    insights_refreshed: int = 0
+    insight_impressions: int = 0
+    insight_opens: int = 0
+    evidence_expansions: int = 0
+    action_opens: int = 0
+    generation_failures: int = 0
     average_views_per_viewer: float
     recommendation_interactions: int
     common_categories: list[NamedCount]

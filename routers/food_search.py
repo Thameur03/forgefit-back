@@ -257,7 +257,7 @@ def _has_branded_volume_basis(item: dict) -> bool:
     USDA derives Branded ``foodNutrients`` from label values by scaling them to
     100 of the declared serving-size unit. For an mL serving that means per
     100 mL, not per 100 g. Without a supplied density or gram portion, that row
-    cannot satisfy Jugurtha Fit's per-100-g contract.
+    cannot satisfy DAUNTRA's per-100-g contract.
     """
     if str(item.get("dataType") or "") != "Branded":
         return False

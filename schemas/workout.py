@@ -57,6 +57,9 @@ class WorkoutCreate(BaseModel):
     # The same key may be safely retried after a timeout or network failure.
     # Old clients that omit this field create rows with NULL (no deduplication).
     client_request_id: Optional[str] = Field(default=None, max_length=36)
+    program_id: Optional[int] = Field(default=None, gt=0)
+    program_day_id: Optional[int] = Field(default=None, gt=0)
+    scheduled_workout_id: Optional[int] = Field(default=None, gt=0)
 
 
 class WorkoutUpdate(BaseModel):
@@ -81,6 +84,9 @@ class WorkoutResponse(BaseModel):
     total_volume_kg: float = 0.0
     client_request_id: Optional[str] = None
     completed_at: Optional[datetime] = None
+    program_id: Optional[int] = None
+    program_day_id: Optional[int] = None
+    scheduled_workout_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -101,6 +107,9 @@ class WorkoutSummary(BaseModel):
     exercise_names: List[str] = Field(default_factory=list)
     client_request_id: Optional[str] = None
     completed_at: Optional[datetime] = None
+    program_id: Optional[int] = None
+    program_day_id: Optional[int] = None
+    scheduled_workout_id: Optional[int] = None
 
     class Config:
         from_attributes = True
