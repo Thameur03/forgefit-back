@@ -68,33 +68,55 @@ def _get_batch_last_sessions(
 
     lower_names = [name.lower() for name in exercise_names]
 
-    # For each exercise name, find the most recent workout_set before the given date
-    # by joining on the max workout date per exercise.
-    results = (
+    # Rank matching rows in the database so only the single latest row for each
+    # case-insensitive exercise name is materialized by the application.  The
+    # previous implementation sorted every matching historical set, loaded all
+    # of them into Python, and then discarded all but the first per exercise.
+    ranked = (
         db.query(WorkoutSet, Workout)
         .join(Workout, WorkoutSet.workout_id == Workout.id)
+        .with_entities(
+            WorkoutSet.exercise_name.label("exercise_name"),
+            Workout.date.label("workout_date"),
+            WorkoutSet.sets.label("sets"),
+            WorkoutSet.reps.label("reps"),
+            WorkoutSet.weight_kg.label("weight_kg"),
+            func.row_number()
+            .over(
+                partition_by=func.lower(WorkoutSet.exercise_name),
+                order_by=(Workout.date.desc(), WorkoutSet.id.desc()),
+            )
+            .label("session_rank"),
+        )
         .filter(
             Workout.user_id == user_id,
             Workout.completed_at.is_not(None),
             func.lower(WorkoutSet.exercise_name).in_(lower_names),
             Workout.date < before_date,
         )
-        .order_by(Workout.date.desc(), WorkoutSet.id.desc())
+        .subquery()
+    )
+    results = (
+        db.query(
+            ranked.c.exercise_name,
+            ranked.c.workout_date,
+            ranked.c.sets,
+            ranked.c.reps,
+            ranked.c.weight_kg,
+        )
+        .filter(ranked.c.session_rank == 1)
         .all()
     )
 
-    # Build map: keep only the first (most recent) result per exercise name
-    last_sessions: dict[str, LastSessionData] = {}
-    for workout_set, workout in results:
-        key = workout_set.exercise_name.lower()
-        if key not in last_sessions:
-            last_sessions[key] = LastSessionData(
-                date=workout.date,
-                sets=workout_set.sets,
-                reps=workout_set.reps,
-                weight_kg=workout_set.weight_kg,
-            )
-    return last_sessions
+    return {
+        row.exercise_name.lower(): LastSessionData(
+            date=row.workout_date,
+            sets=row.sets,
+            reps=row.reps,
+            weight_kg=row.weight_kg,
+        )
+        for row in results
+    }
 
 
 def _compute_totals(workout_sets: list) -> tuple:
