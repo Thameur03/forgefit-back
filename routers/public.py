@@ -76,7 +76,10 @@ date of birth, gender, weight, height, and fitness level.</li><li><strong>Workou
 workouts, exercises, sets, reps, load, history, programs, schedules, and derived records.</li>
 <li><strong>Nutrition:</strong> meals, foods, calories, macros, micronutrients, food searches,
 targets, and history.</li><li><strong>Website/waitlist:</strong> an email address submitted
-to request early-access communications.</li></ul><h2>Authentication and security</h2><p>Access and refresh
+to request early-access communications.</li><li><strong>Subscription:</strong> Apple product and
+transaction identifiers, subscription status and dates, storefront environment, and an opaque
+per-account purchase-binding UUID. Apple processes payment details; DAUNTRA does not receive or
+store payment-card information.</li></ul><h2>Authentication and security</h2><p>Access and refresh
 tokens maintain sessions. Passwords are stored as hashes, and the app stores session credentials
 in operating-system secure storage. Email verification, password reset, token revocation, and
 verified-email deletion codes are used where applicable.</p><h2>Technical information</h2>
@@ -97,17 +100,21 @@ receive food searches or barcode/product lookups without account profile data.</
 <strong>ExerciseDB or a self-hosted compatible service</strong> supplies exercise catalogue content
 without requiring profile data.</li><li><strong>PostHog and Sentry</strong> provide optional analytics
 and diagnostics.</li><li><strong>Google ML Kit</strong> performs on-device barcode recognition and
-limited SDK diagnostics.</li><li><strong>Vercel and Supabase</strong> host the public website and
+limited SDK diagnostics.</li><li><strong>Apple</strong> processes App Store subscriptions and sends
+signed transaction and subscription-status updates.</li><li><strong>Vercel and Supabase</strong> host the public website and
 store waitlist email submissions. Vercel Web Analytics processes aggregate website traffic and
 performance data; website PostHog is opt-in, captures selected interactions and browser exception
 diagnostics when enabled, and keeps session recording disabled.</li></ul>
 <h2>Use and sharing</h2><p>Data provides authentication,
-fitness and nutrition tracking, programs, statistics, Lab Insights, security, support, and reliability.
+fitness and nutrition tracking, programs, statistics, Lab Insights, Premium entitlement,
+security, support, and reliability.
 It is shared with processors only as needed for those functions. DAUNTRA does not sell personal
 information.</p><h2>Deletion and retention</h2><p>Delete in Profile → Account → Delete
 Account or use the <a href="/delete-account">public deletion page</a>. The app hard-deletes the
 account/profile and associated schedules, programs/exercises, workouts/sets, nutrition history,
-account-linked app analytics, and revoked-token records from the active database. Pre-auth anonymous
+account-linked app analytics, billing bindings/subscription state, and revoked-token records from
+the active database. Deleting a DAUNTRA account does not cancel an Apple subscription; cancel it
+separately in Apple subscription settings before deletion if desired. Pre-auth anonymous
 events that are not linked to an account may remain under a rotated anonymous identifier. Limited security logs or provider
 backups may remain until routine expiry where needed for security, legal compliance, or disaster
 recovery; they are not used to restore the deleted account. Waitlist removal is handled through
@@ -125,7 +132,9 @@ def delete_account_page() -> HTMLResponse:
     body = f"""<section class="card"><p class="meta">Public account deletion</p>
 <h1>Delete your DAUNTRA account</h1><div class="notice"><strong>This is permanent.</strong>
 Deletion removes your account/profile, workouts and sets, programs and schedules, nutrition history,
-statistics source data, account-linked app analytics, and session/revocation records.</div><p>Enter your account email.
+statistics source data, account-linked app analytics, billing binding/subscription state, and
+session/revocation records. It does not cancel an Apple subscription; manage that separately in
+Apple subscription settings.</div><p>Enter your account email.
 We return the same response whether an account exists. If it does, a six-digit code is emailed to you.
 Knowing an email address alone can never delete an account.</p><form id="request"><label for="email">
 Account email</label><input id="email" type="email" autocomplete="email" maxlength="254" required>

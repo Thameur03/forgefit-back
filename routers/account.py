@@ -18,6 +18,7 @@ from database import get_db
 from limiter import limiter
 from models.account_deletion import AccountDeletionChallenge
 from models.analytics_event import AnalyticsEvent
+from models.billing import AppleSubscription, BillingIdentity
 from models.nutrition import NutritionLog
 from models.program import Program
 from models.schedule import ScheduledWorkout
@@ -57,6 +58,12 @@ def _delete_user_owned_records(db: Session, user: User) -> None:
         synchronize_session=False
     )
     db.query(AnalyticsEvent).filter(AnalyticsEvent.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(AppleSubscription).filter(
+        AppleSubscription.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(BillingIdentity).filter(BillingIdentity.user_id == user_id).delete(
         synchronize_session=False
     )
     db.query(AccountDeletionChallenge).filter(

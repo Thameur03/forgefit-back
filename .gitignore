@@ -2,6 +2,9 @@
 .env.*
 !.env.example
 *.pem
+# Public Apple PKI trust anchors used only to verify App Store signed JWS.
+# These contain no private key and are not app signing certificates.
+!certificates/apple/*.pem
 *.key
 __pycache__/
 *.pyc

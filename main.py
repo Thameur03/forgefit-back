@@ -23,6 +23,7 @@ from routers.schedule import router as schedule_router
 from routers.ai import router as ai_router
 from routers.account import router as account_router
 from routers.public import router as public_router
+from routers.billing import router as billing_router
 
 import models.user
 import models.workout
@@ -38,6 +39,7 @@ import models.account_deletion
 import models.admin_audit
 import models.operational_event
 import models.lab_insights
+import models.billing
 import logging
 
 from limiter import limiter
@@ -191,6 +193,74 @@ class AnalyticsPayloadLimitMiddleware:
 
 app.add_middleware(AnalyticsPayloadLimitMiddleware)
 
+
+class BillingPayloadLimitMiddleware:
+    """Bound authenticated transactions and public Apple callback bodies."""
+
+    _paths = {
+        "/billing/apple/transaction",
+        "/billing/apple/notifications",
+    }
+    _max_bytes = 64 * 1024
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("path") not in self._paths:
+            await self.app(scope, receive, send)
+            return
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                content_length = int(raw_length)
+            except ValueError:
+                response = JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid Content-Length"},
+                )
+                await response(scope, receive, send)
+                return
+            if content_length > self._max_bytes:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": "Billing payload too large"},
+                )
+                await response(scope, receive, send)
+                return
+
+        messages = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message.get("type") == "http.disconnect":
+                break
+            if message.get("type") != "http.request":
+                continue
+            received += len(message.get("body", b""))
+            if received > self._max_bytes:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": "Billing payload too large"},
+                )
+                await response(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay_receive():
+            if messages:
+                return messages.pop(0)
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+
+app.add_middleware(BillingPayloadLimitMiddleware)
+
 cors_origins = parse_cors_origins(app_env=APP_ENV)
 
 app.add_middleware(
@@ -295,6 +365,7 @@ logger.info(
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(account_router, prefix="/account", tags=["Account"])
 app.include_router(public_router)
+app.include_router(billing_router, prefix="/billing", tags=["Billing"])
 app.include_router(workouts_router, prefix="/workouts", tags=["Workouts"])
 
 app.include_router(exercises_router, prefix="/exercises", tags=["Exercises"])

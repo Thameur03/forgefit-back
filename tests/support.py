@@ -55,6 +55,7 @@ import models.schedule  # noqa: E402, F401
 import models.token  # noqa: E402, F401
 import models.user  # noqa: E402, F401
 import models.workout  # noqa: E402, F401
+import models.billing  # noqa: E402, F401
 
 from database import Base, get_db  # noqa: E402
 from main import app  # noqa: E402

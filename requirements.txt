@@ -1,4 +1,5 @@
 alembic==1.18.4
+app-store-server-library==3.1.2
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.12.1

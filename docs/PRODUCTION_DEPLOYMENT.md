@@ -16,6 +16,10 @@ MAIL_FROM=DAUNTRA <noreply@[verified domain]>
 MAIL_FROM_NAME=DAUNTRA
 USDA_API_KEY=[secret]
 EXERCISEDB_URL=https://[approved ExerciseDB-compatible host]
+APPLE_BUNDLE_ID=com.dauntra.app
+APPLE_APP_ID=[numeric App Store Connect Apple ID]
+APPLE_IAP_ENVIRONMENTS=PRODUCTION
+APPLE_IAP_ONLINE_CHECKS=true
 ```
 
 Resend is the preferred production delivery path. If SMTP is intentionally
@@ -71,7 +75,41 @@ alembic heads
 python -m pytest
 ```
 
-Expected secret-file result: only a placeholder `.env.example`, never `.env` or
-credentials. If a real credential is discovered in current or historical Git,
+Expected result: the placeholder `.env.example` and the three documented public
+Apple root trust anchors only—never `.env`, a private key, or credentials. If a
+real credential is discovered in current or historical Git,
 do not rewrite history automatically: rotate it first, then coordinate a reviewed
 history cleanup if necessary.
+
+## HUMAN ACTION REQUIRED — Apple subscriptions
+
+The source accepts one `DAUNTRA Premium` entitlement from exactly these three
+auto-renewable products under bundle ID `com.dauntra.app`:
+
+| Product ID | Duration | Intended US launch price |
+| --- | --- | --- |
+| `dauntra_premium_weekly` | 1 week | $2.99/week |
+| `dauntra_premium_monthly` | 1 month | $7.99/month |
+| `dauntra_premium_yearly` | 1 year | $44.99/year |
+
+Prices are App Store Connect targets only. The client displays the localized
+StoreKit price; neither this table nor the backend controls storefront pricing.
+
+1. Register the explicit App ID `com.dauntra.app` and create the App Store
+   Connect app. Do not create Apple records under the legacy ForgeFit ID.
+2. Complete Agreements, Tax, and Banking, create subscription group
+   `DAUNTRA Premium`, and create/localize all three product IDs above using
+   Apple's available price points.
+3. Set the App Store Server Notifications V2 production URL to
+   `https://forgefit-back.onrender.com/billing/apple/notifications`. Configure
+   the sandbox URL as well when that Render deployment is explicitly accepting
+   `SANDBOX`.
+4. Set the real numeric `APPLE_APP_ID` and accepted environments in Render.
+   Production verification fails closed when that Apple ID is absent.
+5. Keep `APPLE_IAP_ONLINE_CHECKS=true`. The checked-in `.pem` files under
+   `certificates/apple/` are Apple's public PKI trust anchors, not private keys
+   or app-signing credentials. Update them only from Apple's official PKI page.
+6. Run migration `011`, then verify transaction submission, renewal,
+   expiration, grace period, billing retry, refund/revocation, and notification
+   replay behavior with Apple Sandbox/TestFlight. No Apple private key is
+   required by the current JWS-only verifier and none belongs in this repo.

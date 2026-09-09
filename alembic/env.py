@@ -25,6 +25,11 @@ from models.account_deletion import AccountDeletionChallenge  # noqa: F401
 from models.admin_audit import AdminAuditEvent  # noqa: F401
 from models.operational_event import OperationalEvent  # noqa: F401
 from models.lab_insights import LabAnalysisSnapshot, LabInsightState  # noqa: F401
+from models.billing import (  # noqa: F401
+    AppleNotificationEvent,
+    AppleSubscription,
+    BillingIdentity,
+)
 
 target_metadata = database.Base.metadata
 
