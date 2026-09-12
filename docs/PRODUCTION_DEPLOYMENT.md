@@ -9,20 +9,27 @@ SECRET_KEY=[at least 32 cryptographically random bytes]
 AUTO_CREATE_TABLES=false
 CORS_ORIGINS=https://[approved DAUNTRA website origin]
 PUBLIC_WEB_URL=https://[approved DAUNTRA website origin]
-SUPPORT_EMAIL=[monitored support address]
+SUPPORT_EMAIL=support@dauntra.com
 REQUIRE_EMAIL_VERIFICATION=true
 RESEND_API_KEY=[secret Render value]
-MAIL_FROM=DAUNTRA <noreply@[verified domain]>
+MAIL_FROM=DAUNTRA <noreply@dauntra.com>
 MAIL_FROM_NAME=DAUNTRA
 USDA_API_KEY=[secret]
 EXERCISEDB_URL=https://[approved ExerciseDB-compatible host]
 ```
 
-Resend is the preferred production delivery path. If SMTP is intentionally
-retained as a fallback, also configure `MAIL_SERVER`, `MAIL_PORT`,
-`MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_STARTTLS`, and `MAIL_SSL_TLS` with the
-mail provider's approved values. `RESEND_TEST_RECIPIENT` is development-only
-and is not a production recipient allowlist.
+Resend is the preferred production delivery path. The `dauntra.com` sending
+domain must be verified in Resend, with both SPF and DKIM passing. Transactional
+messages use `SUPPORT_EMAIL` as Reply-To when it contains a valid monitored
+address. `noreply@dauntra.com` does not need to be an inbox;
+`support@dauntra.com` is monitored through Cloudflare Email Routing.
+
+If SMTP is intentionally retained as a fallback, also configure `MAIL_SERVER`,
+`MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_STARTTLS`, and
+`MAIL_SSL_TLS` with the mail provider's approved values.
+`RESEND_TEST_RECIPIENT` is development-only and must not be set in production.
+Actual API keys, SMTP credentials, and other secret values must never be
+committed.
 
 `CORS_ORIGINS` is a comma-separated list of exact HTTPS origins with no path or
 trailing slash. Native Flutter traffic does not require CORS. Production refuses
@@ -45,11 +52,13 @@ not reset the database. Verify `/health` returns only `{"status":"ok"}`; verify
    record at the same hostname; merge it according to the DNS provider's rules
    if one exists.
 3. Wait until every required Resend record shows **Verified**.
-4. Create/use a sender such as `DAUNTRA <noreply@yourdomain.com>` and set
-   that complete value as `MAIL_FROM` in Render.
+4. Use `DAUNTRA <noreply@dauntra.com>` as the sender and set that complete
+   value as `MAIL_FROM` in Render. The address does not need an incoming inbox.
 5. Store a production-scoped Resend key as `RESEND_API_KEY` in Render. Never put
    it in `.env.example`, logs, screenshots, or Git.
-6. Deploy, register with an address other than the Resend-account test address,
+6. Set `SUPPORT_EMAIL=support@dauntra.com`; it becomes Reply-To, while incoming
+   support mail remains handled by Cloudflare Email Routing.
+7. Deploy, register with an address other than the Resend-account test address,
    verify the six-digit code, request a password reset, and request a deletion
    code. Check delivery and confirm no provider detail reaches the API response.
 

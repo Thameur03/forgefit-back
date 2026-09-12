@@ -14,14 +14,16 @@ from email.utils import formataddr, parseaddr
 from dotenv import load_dotenv
 from email_validator import EmailNotValidError, validate_email
 
-from brand import BRAND_NAME, EMAIL_TEAM_NAME
+from brand import BRAND_NAME
 from config import is_production
+from auth.email_templates import EmailBodies, render_code_email
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 RESEND_TEST_RECIPIENT = os.getenv("RESEND_TEST_RECIPIENT", "").strip().lower()
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "").strip()
 MAIL_USERNAME = os.getenv("MAIL_USERNAME", "").strip()
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
 MAIL_FROM = os.getenv("MAIL_FROM", "").strip()
@@ -61,6 +63,19 @@ def _sender_header(*, sandbox: bool = False) -> str:
     if sandbox:
         return formataddr((MAIL_FROM_NAME, _DEFAULT_SENDER))
     return formataddr(_sender_parts())
+
+
+def _support_address() -> str | None:
+    """Return a safe support/Reply-To address, or omit it without failing mail."""
+    if not _valid_email_address(SUPPORT_EMAIL):
+        return None
+    normalized = validate_email(
+        SUPPORT_EMAIL, check_deliverability=False
+    ).normalized.lower()
+    sender_address = _sender_parts()[1]
+    if normalized == sender_address or normalized == "noreply@dauntra.com":
+        return None
+    return normalized
 
 
 def _domain_verified() -> bool:
@@ -106,7 +121,12 @@ def email_configuration_issue() -> str | None:
     return "No usable Resend or SMTP email provider is configured"
 
 
-def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
+def _send_via_resend(
+    to_email: str,
+    subject: str,
+    plain_text_body: str,
+    html_body: str | None = None,
+) -> bool:
     if not RESEND_API_KEY:
         return False
     masked = _mask_email(to_email)
@@ -117,8 +137,13 @@ def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
             "from": _sender_header(sandbox=not _domain_verified()),
             "to": [to_email],
             "subject": subject,
-            "text": body,
+            "text": plain_text_body,
         }
+        if html_body:
+            params["html"] = html_body
+        reply_to = _support_address()
+        if reply_to:
+            params["reply_to"] = reply_to
         resend.Emails.send(params)
         logger.info("[Resend] Email delivered to %s", masked)
         return True
@@ -127,15 +152,25 @@ def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
         return False
 
 
-def _send_via_smtp(to_email: str, subject: str, body: str) -> bool:
+def _send_via_smtp(
+    to_email: str,
+    subject: str,
+    plain_text_body: str,
+    html_body: str | None = None,
+) -> bool:
     if not _can_send_smtp():
         return False
     masked = _mask_email(to_email)
-    msg = MIMEMultipart()
+    msg = MIMEMultipart("alternative")
     msg["From"] = _sender_header() if _sender_parts()[1] else formataddr((MAIL_FROM_NAME, MAIL_USERNAME))
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    reply_to = _support_address()
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.attach(MIMEText(plain_text_body, "plain", "utf-8"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
     try:
         if MAIL_SSL_TLS:
             with smtplib.SMTP_SSL(MAIL_SERVER, MAIL_PORT, timeout=15) as server:
@@ -156,7 +191,12 @@ def _send_via_smtp(to_email: str, subject: str, body: str) -> bool:
         return False
 
 
-def _send_email(to_email: str, subject: str, body: str) -> bool:
+def _send_email(
+    to_email: str,
+    subject: str,
+    plain_text_body: str,
+    html_body: str | None = None,
+) -> bool:
     masked = _mask_email(to_email)
     if RESEND_API_KEY and not _domain_verified():
         if is_production():
@@ -166,37 +206,85 @@ def _send_email(to_email: str, subject: str, body: str) -> bool:
         elif to_email.strip().lower() != RESEND_TEST_RECIPIENT:
             logger.info("[Email] Sandbox delivery skipped for non-test recipient %s", masked)
         else:
-            return _send_via_resend(to_email, subject, body)
-    elif RESEND_API_KEY and _send_via_resend(to_email, subject, body):
+            return _send_via_resend(to_email, subject, plain_text_body, html_body)
+    elif RESEND_API_KEY and _send_via_resend(
+        to_email, subject, plain_text_body, html_body
+    ):
         return True
     if _can_send_smtp():
-        return _send_via_smtp(to_email, subject, body)
+        return _send_via_smtp(to_email, subject, plain_text_body, html_body)
     logger.error("[Email] No delivery path succeeded for %s", masked)
     return False
 
 
 def send_verification_email(email: str, code: str) -> bool:
     logger.info("[Email] Sending verification email to %s", _mask_email(email))
+    bodies: EmailBodies = render_code_email(
+        preheader=f"Your {BRAND_NAME} verification code is ready.",
+        title="VERIFY YOUR EMAIL",
+        intro=(
+            f"Use the verification code below to finish creating your {BRAND_NAME} account.",
+        ),
+        code=code,
+        expiration_text="This code expires in 15 minutes.",
+        security_notes=(
+            f"If you did not create a {BRAND_NAME} account, you can safely ignore this email.",
+        ),
+        support_email=_support_address(),
+    )
     return _send_email(
         email,
         f"Verify your {BRAND_NAME} account",
-        f"Hello,\n\nYour {BRAND_NAME} verification code is:\n\n    {code}\n\nThis code expires in 15 minutes.\n\nIf you did not create an account, please ignore this email.\n\n— {EMAIL_TEAM_NAME}",
+        bodies.plain_text,
+        bodies.html,
     )
 
 
 def send_password_reset_email(email: str, code: str) -> bool:
     logger.info("[Email] Sending password reset email to %s", _mask_email(email))
+    bodies: EmailBodies = render_code_email(
+        preheader=f"Use this code to reset your {BRAND_NAME} password.",
+        title="RESET YOUR PASSWORD",
+        intro=(
+            f"We received a request to reset the password for your {BRAND_NAME} account.",
+        ),
+        code=code,
+        expiration_text="This code expires in 15 minutes.",
+        security_notes=(
+            "If you did not request a password reset, you can ignore this email and your password will remain unchanged.",
+        ),
+        support_email=_support_address(),
+        support_intro="If you believe someone else is trying to access your account, contact:",
+    )
     return _send_email(
         email,
         f"Reset your {BRAND_NAME} password",
-        f"Hello,\n\nYour {BRAND_NAME} password reset code is:\n\n    {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request a password reset, please ignore this email.\n\n— {EMAIL_TEAM_NAME}",
+        bodies.plain_text,
+        bodies.html,
     )
 
 
 def send_account_deletion_email(email: str, code: str) -> bool:
     logger.info("[Email] Sending account deletion email to %s", _mask_email(email))
+    bodies: EmailBodies = render_code_email(
+        preheader=f"Use this code to confirm your {BRAND_NAME} account deletion request.",
+        title="CONFIRM ACCOUNT DELETION",
+        intro=(
+            f"You requested to permanently delete your {BRAND_NAME} account.",
+            "Enter the code below only if you intend to continue.",
+        ),
+        code=code,
+        expiration_text="This code expires in 15 minutes. Enter it only on an official DAUNTRA deletion page.",
+        security_notes=(
+            "Do not share this code with anyone.",
+            "Your account will not be deleted unless this confirmation code is used.",
+        ),
+        support_email=_support_address(),
+        support_intro="If you did not request account deletion, do not use this code and contact:",
+    )
     return _send_email(
         email,
         f"Confirm deletion of your {BRAND_NAME} account",
-        f"Hello,\n\nA request was made to permanently delete your {BRAND_NAME} account.\n\nYour confirmation code is:\n\n    {code}\n\nThis code expires in 15 minutes. Enter it only on an official {BRAND_NAME} deletion page.\n\nIf you did not request deletion, ignore this email. Your account will not be deleted.\n\n— {EMAIL_TEAM_NAME}",
+        bodies.plain_text,
+        bodies.html,
     )
