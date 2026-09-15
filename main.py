@@ -23,6 +23,7 @@ from routers.schedule import router as schedule_router
 from routers.ai import router as ai_router
 from routers.account import router as account_router
 from routers.public import router as public_router
+from routers.internal import router as internal_router
 
 import models.user
 import models.workout
@@ -308,6 +309,7 @@ app.include_router(admin_analytics_router, prefix="/admin", tags=["Admin Analyti
 app.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
 app.include_router(schedule_router, prefix="/schedule", tags=["Schedule"])
 app.include_router(ai_router, prefix="/ai", tags=["AI Coach"])
+app.include_router(internal_router, prefix="/internal", include_in_schema=False)
 
 
 @app.get("/health")

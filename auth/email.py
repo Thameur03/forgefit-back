@@ -16,7 +16,7 @@ from email_validator import EmailNotValidError, validate_email
 
 from brand import BRAND_NAME
 from config import is_production
-from auth.email_templates import EmailBodies, render_code_email
+from auth.email_templates import EmailBodies, render_code_email, render_waitlist_welcome_email
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -285,6 +285,19 @@ def send_account_deletion_email(email: str, code: str) -> bool:
     return _send_email(
         email,
         f"Confirm deletion of your {BRAND_NAME} account",
+        bodies.plain_text,
+        bodies.html,
+    )
+
+
+def send_waitlist_welcome_email(email: str) -> bool:
+    logger.info("[Email] Sending waitlist welcome email to %s", _mask_email(email))
+    bodies: EmailBodies = render_waitlist_welcome_email(
+        support_email=_support_address(),
+    )
+    return _send_email(
+        email,
+        "You're in \u2014 your first month is on us",
         bodies.plain_text,
         bodies.html,
     )
