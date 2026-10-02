@@ -16,7 +16,7 @@ from email_validator import EmailNotValidError, validate_email
 
 from brand import BRAND_NAME
 from config import is_production
-from auth.email_templates import EmailBodies, render_code_email, render_waitlist_welcome_email
+from auth.email_templates import EmailBodies, render_code_email, render_waitlist_welcome_email, render_creator_email
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -301,3 +301,13 @@ def send_waitlist_welcome_email(email: str) -> bool:
         bodies.plain_text,
         bodies.html,
     )
+
+
+def send_creator_request_received_email(email: str) -> bool:
+    bodies = render_creator_email()
+    return _send_email(email, "DAUNTRA Creator Request Received", bodies.plain_text, bodies.html)
+
+
+def send_creator_approved_email(email: str, slug: str, code: str) -> bool:
+    bodies = render_creator_email(approved=True, slug=slug, code=code)
+    return _send_email(email, "Your DAUNTRA Creator Code Is Ready", bodies.plain_text, bodies.html)

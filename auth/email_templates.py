@@ -19,6 +19,40 @@ class EmailBodies:
     html: str
 
 
+def render_creator_email(*, approved: bool = False, slug: str = "", code: str = "") -> EmailBodies:
+    """A concise transactional receipt or approval message, using DAUNTRA's email identity."""
+    if approved:
+        subject_line = "YOUR CREATOR CODE IS READY."
+        lines = [
+            "Your DAUNTRA creator-code request has been approved.",
+            "", "Your creator link:", f"https://dauntra.com/?ref={slug}",
+            "", "Your creator code:", code,
+            "", "This code is for DAUNTRA creator attribution.",
+        ]
+    else:
+        subject_line = "REQUEST RECEIVED."
+        lines = [
+            "Your DAUNTRA creator-code request has been received.",
+            "", "We're reviewing your request now.",
+            "If approved, we'll send you your DAUNTRA creator link and creator code.",
+            "No action is required from you right now.",
+            "Submitting a request does not guarantee acceptance.",
+        ]
+    plain_text = "\n".join([BRAND_NAME, BRAND_LINE, "", subject_line, "", *lines, "", "— DAUNTRA"])
+    paragraphs = "".join(
+        f'<p style="margin:0 0 16px;color:#C1CAD6;font-size:16px;line-height:1.6;">{escape(line) if line else "&nbsp;"}</p>'
+        for line in lines
+    )
+    html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#03060D;color:#F8FAFC;font-family:Arial,Helvetica,sans-serif;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 16px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#0A1424;border:1px solid #183550;border-radius:12px;">
+<tr><td style="padding:36px 32px;"><img src="{BRAND_LOGO_URL}" width="64" height="64" alt="DAUNTRA" style="display:block;margin-bottom:28px;">
+<h1 style="margin:0 0 26px;color:#F8FAFC;font-size:25px;line-height:1.2;">{subject_line}</h1>{paragraphs}
+<p style="margin:22px 0 0;color:#16A4FF;font-weight:bold;">— DAUNTRA</p></td></tr></table></td></tr></table></body></html>'''
+    return EmailBodies(plain_text=plain_text, html=html)
+
+
 def render_waitlist_welcome_email(
     *,
     support_email: str | None = None,

@@ -7,13 +7,14 @@ server-side infrastructure (e.g. the DAUNTRA website API route).
 
 import logging
 import os
+import re
 import secrets
 
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 
-from auth.email import send_waitlist_welcome_email
+from auth.email import send_waitlist_welcome_email, send_creator_request_received_email, send_creator_approved_email
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,12 @@ class WaitlistWelcomeRequest(BaseModel):
     email: str
 
 
+class CreatorApprovedRequest(BaseModel):
+    email: str
+    slug: str
+    code: str
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -102,4 +109,30 @@ def send_waitlist_welcome(
             "[Internal] Waitlist welcome email delivery failed for %s",
             normalized[0] + "***" + normalized[normalized.find("@"):],
         )
+    return {"sent": sent}
+
+
+@router.post("/email/creator-request-received")
+def creator_request_received(body: WaitlistWelcomeRequest, _: None = Depends(require_internal_secret)) -> dict:
+    try:
+        normalized = validate_email(body.email, check_deliverability=False).normalized
+    except EmailNotValidError:
+        raise HTTPException(status_code=422, detail="Invalid email address")
+    sent = send_creator_request_received_email(normalized)
+    if not sent:
+        logger.warning("[Internal] Creator receipt email delivery failed")
+    return {"sent": sent}
+
+
+@router.post("/email/creator-approved")
+def creator_approved(body: CreatorApprovedRequest, _: None = Depends(require_internal_secret)) -> dict:
+    try:
+        normalized = validate_email(body.email, check_deliverability=False).normalized
+    except EmailNotValidError:
+        raise HTTPException(status_code=422, detail="Invalid email address")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,39}", body.slug) or not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{1,19}", body.code):
+        raise HTTPException(status_code=422, detail="Invalid creator identity")
+    sent = send_creator_approved_email(normalized, body.slug, body.code)
+    if not sent:
+        logger.warning("[Internal] Creator approval email delivery failed")
     return {"sent": sent}
